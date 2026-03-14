@@ -3,21 +3,39 @@ Appointment tools for Aria — check availability, book, reschedule, cancel.
 Each tool is an async function compatible with Pipecat's function-calling.
 """
 import random
+from difflib import get_close_matches
 from datetime import date, datetime, timedelta
 
-from agent.config import DB_PATH
-from agent.database.db import AsyncDatabase
+from agent.database.db import get_shared_db
+from agent.database.models import Doctor
 
 
-_db: AsyncDatabase | None = None
-
-
-async def _get_db() -> AsyncDatabase:
-    global _db
-    if _db is None:
-        _db = AsyncDatabase(DB_PATH)
-        await _db.connect()
-    return _db
+def _fuzzy_doctor_matches(query: str, all_doctors: list[Doctor], limit: int = 3) -> list[Doctor]:
+    """Return closest doctor matches by name or specialization when exact match fails."""
+    q = query.lower().strip()
+    if not q:
+        return []
+    names = [d.name for d in all_doctors]
+    specs = list({d.specialization for d in all_doctors})
+    candidates = names + specs
+    matches = get_close_matches(q, [c.lower() for c in candidates], n=limit * 2, cutoff=0.4)
+    result = []
+    seen_ids = set()
+    for m in matches:
+        for d in all_doctors:
+            if d.id not in seen_ids and (m == d.name.lower() or m == d.specialization.lower()):
+                result.append(d)
+                seen_ids.add(d.id)
+                if len(result) >= limit:
+                    return result
+    # Fallback: any doctor if query is very short or partial
+    if not result and all_doctors:
+        for d in all_doctors:
+            if q[0] in d.name.lower() or q[:3] in d.specialization.lower():
+                result.append(d)
+                if len(result) >= limit:
+                    break
+    return result[:limit]
 
 
 def _parse_date(s: str) -> date | None:
@@ -57,18 +75,40 @@ def _format_date_display(d: date) -> str:
     return d.strftime("%b %d")
 
 
+def _is_weekend_request(date_str: str) -> bool:
+    """Check if user requested a weekend day (we're weekdays-only)."""
+    s = (date_str or "").strip().lower()
+    return any(d in s for d in ["saturday", "sunday", "sat", "sun"])
+
+
 async def check_availability(doctor_name_or_specialization: str, preferred_date: str = "next available") -> str:
     """
     Check available appointment slots for a doctor.
 
     Args:
         doctor_name_or_specialization: Doctor name (e.g. "Dr. Chen") or specialization (e.g. "dermatology").
-        preferred_date: Preferred date as YYYY-MM-DD, or "next available" for next 5 business days.
+        preferred_date: Preferred date as YYYY-MM-DD, or "next available" for next 3 business days.
     """
-    db = await _get_db()
+    db = await get_shared_db()
     doctors = await db.get_doctors_by_name_or_specialization(doctor_name_or_specialization)
+
+    # Fuzzy match when no exact match — return closest options for LLM to offer
     if not doctors:
-        return f"I couldn't find a doctor matching '{doctor_name_or_specialization}'. We have General, Cardiology, Dermatology, and Pediatrics."
+        all_doctors = await db.get_all_doctors()
+        fuzzy = _fuzzy_doctor_matches(doctor_name_or_specialization, all_doctors, limit=3)
+        if fuzzy:
+            opts = ", ".join(f"{d.name} ({d.specialization})" for d in fuzzy)
+            return f"No exact match for '{doctor_name_or_specialization}'. Closest options: {opts}. Which one did you mean?"
+        return "No doctor found. We have General, Cardiology, Dermatology, and Pediatrics. Which specialty or doctor would you like?"
+
+    # Weekend requested but doctors are weekdays-only
+    if _is_weekend_request(preferred_date):
+        today = date.today()
+        next_fri = today
+        while next_fri.weekday() != 4:
+            next_fri += timedelta(days=1)
+        next_mon = next_fri + timedelta(days=3)
+        return f"Our doctors aren't available on weekends. Would you like Friday {next_fri.strftime('%b %d')} or Monday {next_mon.strftime('%b %d')} instead?"
 
     slot_duration = 30
     start_hour, end_hour = 9, 17
@@ -85,7 +125,7 @@ async def check_availability(doctor_name_or_specialization: str, preferred_date:
                 d = today + timedelta(days=i)
                 if d.weekday() < 5:
                     dates_to_check.append(d)
-                    if len(dates_to_check) >= 5:
+                    if len(dates_to_check) >= 3:
                         break
     else:
         dates_to_check = []
@@ -93,7 +133,7 @@ async def check_availability(doctor_name_or_specialization: str, preferred_date:
             d = today + timedelta(days=i)
             if d.weekday() < 5:
                 dates_to_check.append(d)
-                if len(dates_to_check) >= 5:
+                if len(dates_to_check) >= 3:
                     break
 
     if not dates_to_check:
@@ -135,9 +175,12 @@ async def check_availability(doctor_name_or_specialization: str, preferred_date:
                     results.append(f"{doc.name} on {_format_date_display(dt)}: {times}")
 
     if not results:
-        return f"{doctors[0].name} is fully booked for the dates I checked. Would you like me to try another week or a different doctor?"
+        all_docs = await db.get_all_doctors()
+        others = [d.name for d in all_docs if d.id != doctors[0].id][:2]
+        opts = f"Would you like me to check Friday, try next week, or book with {others[0]}" + (f" or {others[1]}" if len(others) > 1 else "") + "?"
+        return f"{doctors[0].name} doesn't have openings for those dates. {opts}"
 
-    return "Available slots: " + "; ".join(results[:5])
+    return "Available slots: " + "; ".join(results[:3])
 
 
 async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str, date: str, time: str, notes: str = "") -> str:
@@ -152,10 +195,15 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
         time: Time as HH:MM or HH:MM:SS.
         notes: Optional notes (e.g. reason for visit).
     """
-    db = await _get_db()
+    db = await get_shared_db()
     doctor = await db.get_doctor_by_id(doctor_id)
     if not doctor:
-        return "I couldn't find that doctor. Please try again."
+        all_doctors = await db.get_all_doctors()
+        fuzzy = _fuzzy_doctor_matches(str(doctor_id), all_doctors, limit=3)
+        if fuzzy:
+            opts = ", ".join(f"{d.name} ({d.specialization})" for d in fuzzy)
+            return f"That doctor ID wasn't found. Did you mean one of these? {opts}"
+        return "That doctor isn't in our system. We have General, Cardiology, Dermatology, and Pediatrics. Which would you like?"
 
     # Normalize time
     if len(time) == 5:
@@ -183,6 +231,7 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
         notes=notes,
     )
     await db.upsert_caller(patient_phone, patient_name)
+    await db.update_caller_preferences(patient_phone, "last_doctor", doctor.name)
 
     d = datetime.strptime(date, "%Y-%m-%d").date()
     return f"Appointment booked: {doctor.name} on {d.strftime('%A')} {_format_date_display(d)} at {_format_time_display(start_time)} for {patient_name}. Appointment ID: {apt_id}."
@@ -197,7 +246,7 @@ async def reschedule_appointment(appointment_id: str, new_date: str, new_time: s
         new_date: New date as YYYY-MM-DD.
         new_time: New time as HH:MM or HH:MM:SS.
     """
-    db = await _get_db()
+    db = await get_shared_db()
     apt = await db.get_appointment_by_id(appointment_id)
     if not apt:
         return f"I couldn't find appointment {appointment_id}. Please check the ID."
@@ -229,7 +278,7 @@ async def cancel_appointment(appointment_id: str, reason: str = "") -> str:
         appointment_id: The appointment ID (e.g. APT-1234).
         reason: Optional reason for cancellation.
     """
-    db = await _get_db()
+    db = await get_shared_db()
     apt = await db.get_appointment_by_id(appointment_id)
     if not apt:
         return f"I couldn't find appointment {appointment_id}. Please check the ID."

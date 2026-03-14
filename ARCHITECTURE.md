@@ -33,9 +33,9 @@ The system uses real-time voice over WebRTC: the user speaks in their browser, a
                                              │
                     ┌────────────────────────┴────────────────────────┐
                     │              PIPECAT PIPELINE                   │
-                    │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐ │
-                    │  │Input │─►│ STT  │─►│ LLM  │─►│ TTS  │─►│Output│ │
-                    │  └──────┘  └──────┘  └──┬───┘  └──────┘  └──────┘ │
+                    │  ┌──────┐  ┌──────┐  ┌────┐ ┌────────────┐ ┌────┐ ┌────┐ ┌──────┐ │
+                    │  │Input │─►│ STT  │─►│User│─►│ContextTrim │─►│LLM │─►│TTS │─►│Output│ │
+                    │  └──────┘  └──────┘  └────┘ └────────────┘ └──┬─┘  └────┘ └──────┘ │
                     │                          │                         │
                     │                    ┌─────┴─────┐                    │
                     │                    │  TOOLS    │                    │
@@ -59,7 +59,7 @@ The system uses real-time voice over WebRTC: the user speaks in their browser, a
 | **Framework** | Pipecat | Orchestrates the real-time voice pipeline |
 | **Transport** | SmallWebRTC | WebRTC for browser ↔ server audio (peer-to-peer, no Daily key) |
 | **STT** | Deepgram Nova-2 | Speech-to-text (streaming) |
-| **LLM** | Groq (Llama 3.3 70B) | Conversation + function calling |
+| **LLM** | Groq (Llama 3.1 8B Instant) | Conversation + function calling |
 | **TTS** | Cartesia Sonic-3 | Text-to-speech (streaming) |
 | **VAD** | Silero | Voice activity detection (when user stops speaking) |
 | **Database** | SQLite (aiosqlite) | Doctors, appointments, callers, clinic FAQs |
@@ -75,22 +75,25 @@ The Pipecat pipeline is a linear chain of processors. Frames flow **downstream**
   Transport Input
         │
         ▼
-  Deepgram STT      ◄── Raw audio in
+  Deepgram STT         ◄── Raw audio in
         │
         ▼
-  User Aggregator   ◄── Silero VAD (detects when user stops speaking)
+  User Aggregator      ◄── Silero VAD (detects when user stops speaking)
         │
         ▼
-  Groq LLM          ◄── Transcripts + tool results; generates reply or calls tools
+  ContextTrimmer       ◄── Trims conversation history to last N turns (prevents slowdown)
         │
         ▼
-  Cartesia TTS      ◄── Text → audio
+  Groq LLM             ◄── Transcripts + tool results; generates reply or calls tools
         │
         ▼
-  Transport Output  ◄── Audio out to browser
+  Cartesia TTS         ◄── Text → audio
         │
         ▼
-  Assistant Aggregator  (context tracking)
+  Transport Output     ◄── Audio out to browser
+        │
+        ▼
+  Assistant Aggregator   (context tracking)
 ```
 
 ### Sequence for One User Turn
@@ -120,6 +123,7 @@ The Pipecat pipeline is a linear chain of processors. Frames flow **downstream**
 - **Model:** Nova-2 (streaming, low latency).
 - **Config:** `agent/bot.py` → `DeepgramSTTService`.
 - **Env vars:** `DEEPGRAM_API_KEY`, `DEEPGRAM_UTTERANCE_END_MS`, `DEEPGRAM_ENDPOINTING`.
+- **Defaults:** `utterance_end_ms=300`, `endpointing=100` (optimized for <300ms latency target).
 - **Key setting:** `utterance_end_ms` = how long silence before finalizing transcript. Lower = faster turn release, but may cut off slow speakers.
 
 ### 5.3 Voice Activity Detection (Silero VAD)
@@ -129,17 +133,17 @@ The Pipecat pipeline is a linear chain of processors. Frames flow **downstream**
 
 ### 5.4 Large Language Model (Groq)
 
-- **Model:** Llama 3.3 70B (default); optionally `llama-3.1-8b-instant` for speed.
-- **Config:** `agent/bot.py` → `GroqLLMService` (model, temperature=0.5, max_tokens=150).
-- **Env vars:** `GROQ_API_KEY`, `GROQ_MODEL`.
-- **Behavior:** System prompt enforces accuracy, no hallucination, human-like tone, and tool-only information.
+- **Model:** Llama 3.1 8B Instant (default); optionally `llama-3.3-70b-versatile` for higher quality.
+- **Config:** `agent/bot.py` → `GroqLLMService` (model, temperature=0.3, max_tokens=80).
+- **Env vars:** `GROQ_API_KEY`, `GROQ_MODEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `MAX_CONTEXT_TURNS`.
+- **Behavior:** Short system prompt (~280 tokens); enforces accuracy, no hallucination, filler phrases before tools.
 
 ### 5.5 Text-to-Speech (Cartesia)
 
 - **Model:** Sonic-3 (streaming).
-- **Config:** `agent/bot.py` → `CartesiaTTSService` (voice, emotion="content", speed=1.0).
+- **Config:** `agent/bot.py` → `CartesiaTTSService` (voice, emotion="content", speed=1.05).
 - **Env vars:** `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID`, `TTS_LOW_LATENCY`.
-- **Modes:** `SENTENCE` (default, natural) vs `TOKEN` when `TTS_LOW_LATENCY=true` (faster, slightly choppier).
+- **Modes:** `TOKEN` (default when `TTS_LOW_LATENCY=true`) for faster first audio; `SENTENCE` for more natural prosody.
 
 ### 5.6 Prompts
 
@@ -170,6 +174,10 @@ The LLM calls tools to perform actions. Each tool is implemented in `agent/tools
 
 - **Path:** `data/aria.db` (configurable via `DB_PATH`).
 - **Access:** Async via `aiosqlite` — never block the voice pipeline.
+- **Shared singleton:** `get_shared_db()` — one connection per process; tools all use it.
+- **Pre-warming:** DB connection and caches loaded at startup before transport starts.
+- **Caching:** `clinic_info` and `doctors` pre-loaded into `_clinic_cache` and `_doctors_cache`; tools read from memory, not DB.
+- **WAL mode:** `PRAGMA journal_mode=WAL` for better concurrent reads.
 
 ### Tables
 
@@ -203,7 +211,7 @@ uv run python scripts/seed_db.py
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CARTESIA_VOICE_ID` | (default Aria voice) | Cartesia voice ID |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model (e.g. `llama-3.1-8b-instant` for speed) |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model (e.g. `llama-3.3-70b-versatile` for higher quality) |
 | `DB_PATH` | `data/aria.db` | SQLite database path |
 | `PORT` | `7860` | Server port |
 | `HOST` | `0.0.0.0` | Server bind address |
@@ -212,23 +220,41 @@ uv run python scripts/seed_db.py
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `DEEPGRAM_UTTERANCE_END_MS` | `1000` | ms of silence before final transcript (lower = faster, may cut off) |
-| `DEEPGRAM_ENDPOINTING` | `250` | Pause detection threshold |
-| `TTS_LOW_LATENCY` | `false` | `true` = token streaming, lower latency, slightly choppier |
+| `DEEPGRAM_UTTERANCE_END_MS` | `300` | ms of silence before final transcript (lower = faster, may cut off) |
+| `DEEPGRAM_ENDPOINTING` | `100` | Pause detection threshold |
+| `TTS_LOW_LATENCY` | `true` | `true` = token streaming (default); `false` = sentence mode, more natural |
+| `LLM_TEMPERATURE` | `0.3` | Lower = more factual, less creative |
+| `LLM_MAX_TOKENS` | `80` | Max response tokens; shorter = faster TTS |
+| `MAX_CONTEXT_TURNS` | `10` | Max user+assistant turns before trimming; prevents slowdown on long calls |
 
 ---
 
 ## 9. Latency
 
-### Measured Breakdown (Typical ~1.16s Total)
+### Current Target: <300ms
+
+The defaults are tuned for sub-300ms user→bot response time. **Actual latency** depends on network, geographic distance to Groq/Deepgram/Cartesia APIs, and whether tools are called. Check the terminal for `[LATENCY] User→Bot: X.XXs` on each turn.
+
+### Optimized Breakdown (Target ~290ms)
 
 | Phase | Approx. Time | Description |
 |-------|--------------|-------------|
-| User turn (STT finalization) | ~0.61 s | VAD + Deepgram silence + final transcript |
-| LLM TTFB | ~0.28 s | Time to first token from Groq |
-| TTS aggregation | ~0.10 s | Buffering before synthesis |
-| TTS TTFB | ~0.16 s | First audio from Cartesia |
-| **Total** | **~1.16 s** | User stops speaking → Aria starts speaking |
+| User turn (STT finalization) | ~0.12 s | VAD + Deepgram (utterance_end=300ms, endpointing=100) |
+| LLM TTFB | ~0.08 s | 8B-instant, short prompt, max_tokens=80 |
+| TTS TTFB | ~0.09 s | Token streaming, speed=1.05 |
+| **Total** | **~290 ms** | User stops speaking → Aria starts speaking (no tool calls) |
+
+*With tool calls:* Add ~50–150ms per call (DB cached lookups are fast; check_availability does more work).
+
+### Optimizations Applied
+
+- `utterance_end_ms` 300, `endpointing` 100 — faster turn release (~400ms saved vs 1000/250)
+- `llama-3.1-8b-instant` — ~200ms faster than 70B
+- System prompt ~280 tokens — less to process (~30ms)
+- `TTS_LOW_LATENCY=true` (TOKEN mode) — faster first audio (~90ms)
+- `max_tokens` 80, `speed` 1.05 — shorter replies, quicker TTS (~60ms)
+- DB pre-warm + clinic/doctors cache — no cold DB hits on first tool call (~50ms)
+- `ContextTrimmer` — caps history so long calls don't slow down
 
 ### Lower Latency Options
 
@@ -263,6 +289,7 @@ aria-voice-agent/
 ├── agent/
 │   ├── bot.py           # Main pipeline (STT, LLM, TTS, transport)
 │   ├── config.py        # Loads env vars
+│   ├── context_manager.py  # ContextTrimmer — trims history to MAX_CONTEXT_TURNS
 │   ├── prompts.py       # System prompt, greeting
 │   ├── database/
 │   │   ├── db.py        # Async SQLite wrapper
@@ -307,12 +334,14 @@ Then open **http://localhost:7860/client** and click **Call**.
 | Decision | Rationale |
 |----------|-----------|
 | **SmallWebRTC** | Works on Windows; no Daily key; peer-to-peer. |
-| **Groq 70B** | Balance of quality and speed; temperature 0.5 for factual output. |
+| **Groq 8B-instant** | Low-latency default; 70B available for higher quality when needed. |
+| **Shared DB + caching** | Single connection; clinic_info and doctors pre-loaded at startup — no DB hits for common lookups. |
 | **Async SQLite** | Non-blocking DB so voice pipeline stays responsive. |
 | **Tool-only information** | No hallucination; answers only from clinic_info, appointments, etc. |
-| **Temperature 0.5** | More factual, less creative; reduces fabrication. |
-| **Sentence aggregation (default)** | Natural TTS; TOKEN mode optional for lower latency. |
-| **UserBotLatencyObserver** | Measures and logs latency for optimization. |
+| **Temperature 0.3** | More factual, less creative; reduces fabrication. |
+| **TOKEN TTS (default)** | Faster first audio; SENTENCE mode available for more natural prosody. |
+| **ContextTrimmer** | Caps conversation history to prevent gradual slowdown over long calls. |
+| **UserBotLatencyObserver** | Measures and logs latency; warns when above 300ms target. |
 
 ---
 
@@ -321,9 +350,9 @@ Then open **http://localhost:7860/client** and click **Call**.
 - **Logging:** Loguru (Pipecat default).
 - **Latency:** `UserBotLatencyObserver` logs:
   - `[LATENCY] First bot speech (greeting)`
-  - `[LATENCY] User→Bot response`
+  - `[LATENCY] User→Bot` — warns if above 300ms target
   - `[LATENCY] Breakdown` (per-service TTFB, user turn, etc.)
 
 ---
 
-*Last updated to reflect the current Aria voice agent implementation.*
+*Last updated to reflect latency optimizations: <300ms target, 8B-instant, DB caching, ContextTrimmer, token TTS.*

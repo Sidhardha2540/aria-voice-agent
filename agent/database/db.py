@@ -11,6 +11,17 @@ import aiosqlite
 from agent.config import DB_PATH
 from agent.database.models import Doctor, Appointment, Caller, ClinicInfo
 
+_shared_instance = None
+
+
+async def get_shared_db():
+    """Shared singleton DB instance — one connection, pre-warmed caches."""
+    global _shared_instance
+    if _shared_instance is None:
+        _shared_instance = AsyncDatabase(DB_PATH)
+        await _shared_instance.connect()
+    return _shared_instance
+
 
 class AsyncDatabase:
     """
@@ -20,6 +31,8 @@ class AsyncDatabase:
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or DB_PATH
+        self._clinic_cache: dict[str, str] = {}
+        self._doctors_cache: list | None = None
 
     async def connect(self) -> None:
         """Ensure the data directory exists and connect to SQLite."""
@@ -27,6 +40,26 @@ class AsyncDatabase:
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row  # access columns by name
         await self._create_tables()
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._load_caches()
+
+    async def _load_caches(self) -> None:
+        """Pre-load clinic_info and doctors into memory at startup."""
+        async with self._conn.execute("SELECT key, value FROM clinic_info") as cur:
+            for r in await cur.fetchall():
+                self._clinic_cache[r["key"]] = r["value"]
+        async with self._conn.execute("SELECT * FROM doctors") as cur:
+            rows = await cur.fetchall()
+        self._doctors_cache = [
+            Doctor(
+                id=r["id"],
+                name=r["name"],
+                specialization=r["specialization"],
+                available_days=json.loads(r["available_days"]),
+                slot_duration_minutes=r["slot_duration_minutes"],
+            )
+            for r in rows
+        ]
 
     async def _create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -71,47 +104,25 @@ class AsyncDatabase:
         if hasattr(self, "_conn"):
             await self._conn.close()
 
-    # ——— Doctors ———
+    # ——— Doctors (from cache) ———
     async def get_all_doctors(self) -> list[Doctor]:
-        """Fetch all doctors."""
-        async with self._conn.execute("SELECT * FROM doctors") as cur:
-            rows = await cur.fetchall()
-        return [
-            Doctor(
-                id=r["id"],
-                name=r["name"],
-                specialization=r["specialization"],
-                available_days=json.loads(r["available_days"]),
-                slot_duration_minutes=r["slot_duration_minutes"],
-            )
-            for r in rows
-        ]
+        """Fetch all doctors from cache."""
+        return self._doctors_cache or []
 
     async def get_doctor_by_id(self, doctor_id: int) -> Doctor | None:
-        """Fetch a doctor by ID."""
-        async with self._conn.execute(
-            "SELECT * FROM doctors WHERE id = ?", (doctor_id,)
-        ) as cur:
-            r = await cur.fetchone()
-        if r is None:
+        """Fetch a doctor by ID from cache."""
+        if self._doctors_cache is None:
             return None
-        return Doctor(
-            id=r["id"],
-            name=r["name"],
-            specialization=r["specialization"],
-            available_days=json.loads(r["available_days"]),
-            slot_duration_minutes=r["slot_duration_minutes"],
-        )
+        for d in self._doctors_cache:
+            if d.id == doctor_id:
+                return d
+        return None
 
     async def get_doctors_by_name_or_specialization(self, query: str) -> list[Doctor]:
-        """Fuzzy match by name or specialization."""
+        """Fuzzy match by name or specialization from cache."""
         all_doctors = await self.get_all_doctors()
         q = query.lower().strip()
-        return [
-            d
-            for d in all_doctors
-            if q in d.name.lower() or q in d.specialization.lower()
-        ]
+        return [d for d in all_doctors if q in d.name.lower() or q in d.specialization.lower()]
 
     # ——— Appointments ———
     async def get_appointments_by_doctor_and_date(
@@ -264,12 +275,8 @@ class AsyncDatabase:
 
     # ——— Clinic info ———
     async def get_clinic_info(self, key: str) -> str | None:
-        """Get a clinic info value by key."""
-        async with self._conn.execute(
-            "SELECT value FROM clinic_info WHERE key = ?", (key,)
-        ) as cur:
-            r = await cur.fetchone()
-        return r["value"] if r else None
+        """Get a clinic info value by key (from cache)."""
+        return self._clinic_cache.get(key)
 
     async def set_clinic_info(self, key: str, value: str) -> None:
         """Set a clinic info value."""

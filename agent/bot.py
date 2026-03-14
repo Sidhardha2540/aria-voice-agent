@@ -8,16 +8,26 @@ from agent.config import (
     DEEPGRAM_API_KEY,
     DEEPGRAM_ENDPOINTING,
     DEEPGRAM_UTTERANCE_END_MS,
+    ENABLE_BACKCHANNELING,
+    ENABLE_DUAL_LLM,
     GROQ_API_KEY,
     GROQ_MODEL,
+    GROQ_MODEL_FAST,
+    GROQ_MODEL_SMART,
+    LLM_MAX_TOKENS,
+    LLM_TEMPERATURE,
     TTS_LOW_LATENCY,
+    USE_LLM_CLASSIFIER,
 )
 from agent.prompts import GREETING_PROMPT, SYSTEM_PROMPT
 
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import ClientConnectedFrame, LLMRunFrame
+from pipecat.frames.frames import ClientConnectedFrame, TTSSpeakFrame
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -41,9 +51,14 @@ from agent.tools.appointments import (
     check_availability,
     reschedule_appointment,
 )
-from agent.tools.caller_memory import lookup_caller
+from agent.tools.caller_memory import lookup_caller, save_caller
 from agent.tools.clinic_info import get_clinic_info
 from agent.tools.escalation import escalate_to_human
+from agent.context_manager import ContextTrimmer
+from agent.barge_in_logger import BargeInLogger
+from agent.emotion_mapper import apply_emotion_transform, EMOTION_CONTENT
+from agent.intent_router import IntentRouter
+from agent.metrics import CallMetrics, log_and_persist_metrics, parse_breakdown_events
 
 try:
     from deepgram import LiveOptions
@@ -51,7 +66,7 @@ except ImportError:
     LiveOptions = None  # type: ignore
 
 
-def _create_pipeline(transport):
+def _create_pipeline(transport, metrics_ref: dict):
     """Build the Pipecat pipeline with STT, LLM, TTS, and tools."""
     logger.info(
         "[CONFIG] Latency: utterance_end_ms=%s endpointing=%s model=%s tts_low_latency=%s",
@@ -73,13 +88,14 @@ def _create_pipeline(transport):
         )) if LiveOptions else {}),
     )
 
-    # Groq: 70b for accuracy; temperature 0.5 to reduce hallucination
+    # Groq: single model or dual (8B/70B routed by IntentRouter)
+    initial_model = GROQ_MODEL_FAST if ENABLE_DUAL_LLM else GROQ_MODEL
     llm = GroqLLMService(
         api_key=GROQ_API_KEY,
         settings=GroqLLMService.Settings(
-            model=GROQ_MODEL,
-            temperature=0.5,  # lower = more factual, less creative/hallucinatory
-            max_completion_tokens=150,
+            model=initial_model,
+            temperature=LLM_TEMPERATURE,
+            max_completion_tokens=LLM_MAX_TOKENS,
         ),
     )
 
@@ -126,11 +142,47 @@ def _create_pipeline(transport):
 
     async def _lookup_caller(params):
         result = await lookup_caller(params.arguments.get("phone_number", ""))
+        m = metrics_ref.get("metrics")
+        if m and "Returning caller" in str(result):
+            m.set_caller_recognized(True)
+        await params.result_callback(result)
+
+    async def _save_caller(params):
+        args = params.arguments
+        result = await save_caller(
+            args.get("phone_number", ""),
+            args.get("name", ""),
+        )
         await params.result_callback(result)
 
     async def _escalate_to_human(params):
-        result = await escalate_to_human(params.arguments.get("reason", ""))
+        args = params.arguments
+        reason = args.get("reason", "")
+        result = await escalate_to_human(
+            reason=reason,
+            caller_name=args.get("caller_name", ""),
+            caller_phone=args.get("caller_phone", ""),
+            caller_wanted=args.get("caller_wanted", ""),
+            aria_tried=args.get("aria_tried", ""),
+        )
+        m = metrics_ref.get("metrics")
+        if m:
+            m.record_escalation(reason)
         await params.result_callback(result)
+
+    def _wrap_tool_handler(name, handler):
+        async def wrapped(params):
+            try:
+                await handler(params)
+                m = metrics_ref.get("metrics")
+                if m:
+                    m.record_tool_call(name)
+            except Exception:
+                m = metrics_ref.get("metrics")
+                if m:
+                    m.record_tool_error()
+                raise
+        return wrapped
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -138,31 +190,31 @@ def _create_pipeline(transport):
     tools = ToolsSchema(standard_tools=[
         FunctionSchema(
             name="check_availability",
-            description="Check available appointment slots for a doctor by name or specialization",
+            description="Check open slots for a doctor by name or specialty",
             properties={
-                "doctor_name_or_specialization": {"type": "string", "description": "Doctor name (e.g. Dr. Chen) or specialization (e.g. dermatology)"},
-                "preferred_date": {"type": "string", "description": "Date as YYYY-MM-DD or 'next available'"},
+                "doctor_name_or_specialization": {"type": "string", "description": "Doctor name or specialty"},
+                "preferred_date": {"type": "string", "description": "YYYY-MM-DD or 'next available'"},
             },
             required=["doctor_name_or_specialization"],
         ),
         FunctionSchema(
             name="book_appointment",
-            description="Book an appointment with a doctor",
+            description="Book appointment with a doctor",
             properties={
-                "doctor_id": {"type": "integer", "description": "Doctor ID (1-4)"},
-                "patient_name": {"type": "string", "description": "Patient full name"},
-                "patient_phone": {"type": "string", "description": "Patient phone number"},
-                "date": {"type": "string", "description": "Date as YYYY-MM-DD"},
-                "time": {"type": "string", "description": "Time as HH:MM or HH:MM:SS"},
+                "doctor_id": {"type": "integer", "description": "Doctor ID"},
+                "patient_name": {"type": "string", "description": "Patient name"},
+                "patient_phone": {"type": "string", "description": "Phone number"},
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "time": {"type": "string", "description": "HH:MM"},
                 "notes": {"type": "string", "description": "Optional notes"},
             },
             required=["doctor_id", "patient_name", "patient_phone", "date", "time"],
         ),
         FunctionSchema(
             name="reschedule_appointment",
-            description="Reschedule an existing appointment",
+            description="Reschedule an appointment",
             properties={
-                "appointment_id": {"type": "string", "description": "Appointment ID (e.g. APT-1234)"},
+                "appointment_id": {"type": "string", "description": "Appointment ID"},
                 "new_date": {"type": "string", "description": "New date YYYY-MM-DD"},
                 "new_time": {"type": "string", "description": "New time HH:MM"},
             },
@@ -179,23 +231,52 @@ def _create_pipeline(transport):
         ),
         FunctionSchema(
             name="get_clinic_info",
-            description="Get clinic FAQs: hours, address, insurance, services, parking",
+            description="Clinic FAQs: hours, address, insurance, services, parking",
             properties={"topic": {"type": "string", "description": "hours, address, insurance, services, parking, general"}},
             required=["topic"],
         ),
         FunctionSchema(
             name="lookup_caller",
-            description="Check if caller has called before (returning caller)",
-            properties={"phone_number": {"type": "string", "description": "Caller phone number"}},
+            description="Check if caller has called before. Call as soon as you have their phone.",
+            properties={"phone_number": {"type": "string", "description": "Phone number"}},
+            required=["phone_number"],
+        ),
+        FunctionSchema(
+            name="save_caller",
+            description="Save or update caller record when new caller gives name and phone",
+            properties={
+                "phone_number": {"type": "string", "description": "Phone number"},
+                "name": {"type": "string", "description": "Caller name"},
+            },
             required=["phone_number"],
         ),
         FunctionSchema(
             name="escalate_to_human",
-            description="Transfer to human staff when outside Aria's scope",
-            properties={"reason": {"type": "string", "description": "Reason for transfer"}},
+            description="Transfer to human when user requests, frustrated, failed twice, or out of scope",
+            properties={
+                "reason": {"type": "string", "description": "Why escalating: user request, frustration, repeated failure, out of scope"},
+                "caller_name": {"type": "string", "description": "Caller name if known"},
+                "caller_phone": {"type": "string", "description": "Caller phone if known"},
+                "caller_wanted": {"type": "string", "description": "What the caller asked for"},
+                "aria_tried": {"type": "string", "description": "What Aria already attempted"},
+            },
             required=["reason"],
         ),
     ])
+
+    def _wrap_with_metrics(name, fn):
+        async def wrapped(params):
+            try:
+                await fn(params)
+                m = metrics_ref.get("metrics")
+                if m:
+                    m.record_tool_call(name)
+            except Exception:
+                m = metrics_ref.get("metrics")
+                if m:
+                    m.record_tool_error()
+                raise
+        return wrapped
 
     for name, handler in [
         ("check_availability", _check_availability),
@@ -204,9 +285,10 @@ def _create_pipeline(transport):
         ("cancel_appointment", _cancel_appointment),
         ("get_clinic_info", _get_clinic_info),
         ("lookup_caller", _lookup_caller),
+        ("save_caller", _save_caller),
         ("escalate_to_human", _escalate_to_human),
     ]:
-        llm.register_function(name, handler)
+        llm.register_function(name, _wrap_with_metrics(name, handler))
 
     context = LLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
@@ -218,33 +300,80 @@ def _create_pipeline(transport):
         text_aggregation_mode=TextAggregationMode.TOKEN if TTS_LOW_LATENCY else TextAggregationMode.SENTENCE,
         settings=CartesiaTTSService.Settings(
             voice=CARTESIA_VOICE_ID,
-            generation_config=GenerationConfig(
-                emotion="content",  # warm, natural tone for humanized voice
-                speed=1.0,          # 1.0 for snappier response; 0.95 for more natural pacing
+            generation_config=GenerationConfig(emotion="content", speed=1.05),
+        ),
+    )
+
+    # Emotion-aware TTS: heuristic infers tone from text, prepends SSML tags (zero latency)
+    _last_emotion: list[str] = [EMOTION_CONTENT]
+    _last_speed: list[float] = [1.05]
+
+    async def _emotion_transform(text: str, _agg_type: str) -> str:
+        out, _, _ = apply_emotion_transform(text, _last_emotion, _last_speed)
+        return out
+
+    tts.add_text_transformer(_emotion_transform, "*")
+
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            user_turn_strategies=UserTurnStrategies(
+                start=[
+                    VADUserTurnStartStrategy(enable_interruptions=True, enable_user_speaking_frames=True),
+                    TranscriptionUserTurnStartStrategy(enable_interruptions=True),
+                ],
             ),
         ),
     )
 
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
-    )
+    def _on_barge_in():
+        m = metrics_ref.get("metrics")
+        if m:
+            m.record_barge_in()
 
-    pipeline = Pipeline([
+    context_trimmer = ContextTrimmer(context)
+    barge_in_logger = BargeInLogger(on_barge_in=_on_barge_in)
+
+    # Pipeline: input → STT → user aggregator → ... → LLM → TTS → output
+    # TODO (backchanneling): When ENABLE_BACKCHANNELING, add BackchannelProcessor
+    # after barge_in_logger to inject "mhm"/"okay" during long user turns. See agent/backchanneling.py.
+    pipeline_stages = [
         transport.input(),
         stt,
         user_aggregator,
-        llm,
-        tts,
-        transport.output(),
-        assistant_aggregator,
-    ])
+        barge_in_logger,
+        context_trimmer,
+    ]
+    if ENABLE_DUAL_LLM:
+        intent_router = IntentRouter(
+            context,
+            model_fast=GROQ_MODEL_FAST,
+            model_smart=GROQ_MODEL_SMART,
+            api_key=GROQ_API_KEY,
+            metrics_ref=metrics_ref,
+            use_llm_classifier=USE_LLM_CLASSIFIER,
+        )
+        pipeline_stages.append(intent_router)
+    pipeline_stages.extend([llm, tts, transport.output(), assistant_aggregator])
+
+    pipeline = Pipeline(pipeline_stages)
     return pipeline, context
+
+
+async def _prewarm_db():
+    from agent.database.db import get_shared_db
+    await get_shared_db()
 
 
 async def run_bot(transport):
     """Core bot logic — transport-agnostic."""
-    pipeline, context = _create_pipeline(transport)
+    await _prewarm_db()
+    if ENABLE_BACKCHANNELING:
+        logger.warning("[BACKCHANNEL] ENABLE_BACKCHANNELING=true but not implemented; see agent/backchanneling.py TODO")
+    metrics_ref = {}
+    breakdown_ref = {}
+    pipeline, context = _create_pipeline(transport, metrics_ref)
 
     latency_observer = UserBotLatencyObserver()
 
@@ -254,13 +383,21 @@ async def run_bot(transport):
 
     @latency_observer.event_handler("on_latency_measured")
     async def _on_latency(observer, latency_seconds):
-        logger.info(f"[LATENCY] User→Bot response: {latency_seconds:.2f}s")
+        logger.info(f"[LATENCY] User→Bot: {latency_seconds:.2f}s")
+        if latency_seconds > 0.3:
+            logger.warning("[LATENCY] Above 300ms target!")
+        m = metrics_ref.get("metrics")
+        if m:
+            b = breakdown_ref.pop("last", None)
+            breakdown = parse_breakdown_events(b) if b else None
+            m.record_turn(latency_seconds * 1000, breakdown)
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def _on_breakdown(observer, breakdown):
         logger.info("[LATENCY] Breakdown:")
         for event in breakdown.chronological_events():
             logger.info(f"  {event}")
+        breakdown_ref["last"] = breakdown
 
     task = PipelineTask(
         pipeline,
@@ -275,13 +412,20 @@ async def run_bot(transport):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, webrtc_connection):
-        # Push ClientConnectedFrame so latency observer can measure first speech
-        await task.queue_frames([ClientConnectedFrame()])
-        context.add_message({"role": "user", "content": f"Greet the caller. Say: {GREETING_PROMPT}"})
-        await task.queue_frames([LLMRunFrame()])
+        metrics_ref["metrics"] = CallMetrics()
+        if not ENABLE_DUAL_LLM:
+            metrics_ref["metrics"].set_model_used(GROQ_MODEL)
+        # Push frames through pipeline: latency marker + greeting via TTS (bypasses LLM for consistent intro)
+        await task.queue_frames([
+            ClientConnectedFrame(),
+            TTSSpeakFrame(GREETING_PROMPT, append_to_context=True),
+        ])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, webrtc_connection):
+        m = metrics_ref.pop("metrics", None)
+        if m:
+            log_and_persist_metrics(m)
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=False)

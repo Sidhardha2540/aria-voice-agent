@@ -1,18 +1,7 @@
 """
 Clinic info tool — FAQs, hours, address, insurance, services.
 """
-from agent.config import DB_PATH
-from agent.database.db import AsyncDatabase
-
-_db: AsyncDatabase | None = None
-
-
-async def _get_db() -> AsyncDatabase:
-    global _db
-    if _db is None:
-        _db = AsyncDatabase(DB_PATH)
-        await _db.connect()
-    return _db
+from agent.database.db import get_shared_db
 
 
 # Map common topics to DB keys
@@ -41,7 +30,7 @@ async def get_clinic_info(topic: str) -> str:
     Args:
         topic: One of: hours, address, insurance, services, parking, general.
     """
-    db = await _get_db()
+    db = await get_shared_db()
     t = (topic or "").strip().lower()
     key = TOPIC_MAP.get(t, t) if t else "general"
     val = await db.get_clinic_info(key)
