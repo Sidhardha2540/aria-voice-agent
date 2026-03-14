@@ -137,6 +137,9 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+
+# Local database
+data/*.db
 .venv
 env/
 venv/
@@ -204,4 +207,12 @@ cython_debug/
 # Marimo
 marimo/_static/
 marimo/_lsp/
-__marimo__/
+__marimo__
+
+# Local database
+data/*.db
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
