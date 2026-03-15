@@ -1,50 +1,49 @@
 """
-Data models (dataclasses) for Aria's database.
-These represent the shape of data in our SQLite tables.
+Pydantic models for Aria's database.
+Validated, serializable, consistent — bad data is caught before reaching the LLM or caller.
 """
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+from enum import Enum
+
+from pydantic import BaseModel, Field
 
 
-@dataclass
-class Doctor:
-    """A doctor at the clinic."""
+class AppointmentStatus(str, Enum):
+    BOOKED = "booked"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    NO_SHOW = "no_show"
+
+
+class Doctor(BaseModel):
     id: int
     name: str
     specialization: str
-    available_days: list[str]  # e.g. ["Monday", "Tuesday", ...]
+    available_days: list[str]
     slot_duration_minutes: int = 30
 
 
-@dataclass
-class Appointment:
-    """An appointment record."""
+class Appointment(BaseModel):
     id: str
     doctor_id: int
     patient_name: str
     patient_phone: str
-    appointment_date: str  # ISO date "YYYY-MM-DD"
-    start_time: str       # ISO time "HH:MM:SS"
+    appointment_date: str  # YYYY-MM-DD
+    start_time: str
     end_time: str
-    status: str           # "booked" | "cancelled" | "completed"
+    status: AppointmentStatus = AppointmentStatus.BOOKED
     created_at: str
     notes: str = ""
 
 
-@dataclass
-class Caller:
-    """A caller (patient) we've spoken to before."""
+class Caller(BaseModel):
     id: int
     phone_number: str
-    name: str
+    name: str = ""
     last_call_at: str
-    preferences: dict  # JSON blob
-    call_count: int
+    preferences: dict = Field(default_factory=dict)
+    call_count: int = 1
 
 
-@dataclass
-class ClinicInfo:
-    """Key-value store for FAQs, hours, etc."""
+class ClinicInfo(BaseModel):
     key: str
     value: str

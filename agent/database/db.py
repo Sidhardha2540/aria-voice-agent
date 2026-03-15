@@ -1,150 +1,61 @@
 """
-Async SQLite database wrapper for Aria.
-Uses aiosqlite so we never block the event loop (critical for real-time voice).
+Database access for Aria — single connection via DatabaseManager + repositories.
+This module provides backward-compatible get_shared_db() returning an adapter
+that delegates to db_manager and repositories. All callers share one connection.
 """
-import json
-import os
-from pathlib import Path
+from datetime import datetime
 
-import aiosqlite
-
-from agent.config import DB_PATH
+from agent.database.manager import db_manager
 from agent.database.models import Doctor, Appointment, Caller, ClinicInfo
+from agent.database.repositories import (
+    DoctorRepository,
+    AppointmentRepository,
+    CallerRepository,
+    ClinicInfoRepository,
+)
 
 _shared_instance = None
 
 
-async def get_shared_db():
-    """Shared singleton DB instance — one connection, pre-warmed caches."""
+async def get_shared_db() -> "SharedDbAdapter":
+    """Shared DB adapter — one connection (db_manager), pre-initialized on first call."""
     global _shared_instance
     if _shared_instance is None:
-        _shared_instance = AsyncDatabase(DB_PATH)
-        await _shared_instance.connect()
+        await db_manager.startup()
+        _shared_instance = SharedDbAdapter()
     return _shared_instance
 
 
-class AsyncDatabase:
+class SharedDbAdapter:
     """
-    Handles all database operations for the voice agent.
-    All methods are async — never use blocking sqlite3 directly in a voice pipeline!
+    Backward-compatible adapter: same interface as the old AsyncDatabase.
+    Delegates to db_manager and repositories. Use get_shared_db() to obtain it.
     """
 
-    def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or DB_PATH
-        self._clinic_cache: dict[str, str] = {}
-        self._doctors_cache: list | None = None
+    def __init__(self) -> None:
+        self._doctors = DoctorRepository(db_manager)
+        self._appointments = AppointmentRepository(db_manager)
+        self._callers = CallerRepository(db_manager)
+        self._clinic = ClinicInfoRepository(db_manager)
 
-    async def connect(self) -> None:
-        """Ensure the data directory exists and connect to SQLite."""
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.db_path)
-        self._conn.row_factory = aiosqlite.Row  # access columns by name
-        await self._create_tables()
-        await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._load_caches()
-
-    async def _load_caches(self) -> None:
-        """Pre-load clinic_info and doctors into memory at startup."""
-        async with self._conn.execute("SELECT key, value FROM clinic_info") as cur:
-            for r in await cur.fetchall():
-                self._clinic_cache[r["key"]] = r["value"]
-        async with self._conn.execute("SELECT * FROM doctors") as cur:
-            rows = await cur.fetchall()
-        self._doctors_cache = [
-            Doctor(
-                id=r["id"],
-                name=r["name"],
-                specialization=r["specialization"],
-                available_days=json.loads(r["available_days"]),
-                slot_duration_minutes=r["slot_duration_minutes"],
-            )
-            for r in rows
-        ]
-
-    async def _create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS doctors (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                specialization TEXT NOT NULL,
-                available_days TEXT NOT NULL,
-                slot_duration_minutes INTEGER DEFAULT 30
-            );
-            CREATE TABLE IF NOT EXISTS appointments (
-                id TEXT PRIMARY KEY,
-                doctor_id INTEGER NOT NULL,
-                patient_name TEXT NOT NULL,
-                patient_phone TEXT NOT NULL,
-                appointment_date TEXT NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'booked',
-                created_at TEXT NOT NULL,
-                notes TEXT DEFAULT '',
-                FOREIGN KEY (doctor_id) REFERENCES doctors(id)
-            );
-            CREATE TABLE IF NOT EXISTS callers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone_number TEXT UNIQUE NOT NULL,
-                name TEXT DEFAULT '',
-                last_call_at TEXT NOT NULL,
-                preferences TEXT DEFAULT '{}',
-                call_count INTEGER DEFAULT 1
-            );
-            CREATE TABLE IF NOT EXISTS clinic_info (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-        """)
-        await self._conn.commit()
-
-    async def close(self) -> None:
-        """Close the database connection."""
-        if hasattr(self, "_conn"):
-            await self._conn.close()
-
-    # ——— Doctors (from cache) ———
+    # ——— Doctors ———
     async def get_all_doctors(self) -> list[Doctor]:
-        """Fetch all doctors from cache."""
-        return self._doctors_cache or []
+        return await self._doctors.get_all()
 
     async def get_doctor_by_id(self, doctor_id: int) -> Doctor | None:
-        """Fetch a doctor by ID from cache."""
-        if self._doctors_cache is None:
-            return None
-        for d in self._doctors_cache:
-            if d.id == doctor_id:
-                return d
-        return None
+        return await self._doctors.get_by_id(doctor_id)
 
     async def get_doctors_by_name_or_specialization(self, query: str) -> list[Doctor]:
-        """Fuzzy match by name or specialization from cache."""
-        all_doctors = await self.get_all_doctors()
-        q = query.lower().strip()
-        return [d for d in all_doctors if q in d.name.lower() or q in d.specialization.lower()]
+        return await self._doctors.get_by_name_or_specialization(query)
 
     # ——— Appointments ———
     async def get_appointments_by_doctor_and_date(
         self, doctor_id: int, date: str
     ) -> list[Appointment]:
-        """Get booked appointments for a doctor on a date."""
-        async with self._conn.execute(
-            """SELECT * FROM appointments
-               WHERE doctor_id = ? AND appointment_date = ? AND status = 'booked'
-               ORDER BY start_time""",
-            (doctor_id, date),
-        ) as cur:
-            rows = await cur.fetchall()
-        return [self._row_to_appointment(r) for r in rows]
+        return await self._appointments.get_by_doctor_and_date(doctor_id, date)
 
     async def get_appointment_by_id(self, appointment_id: str) -> Appointment | None:
-        """Fetch appointment by ID (e.g. APT-1234)."""
-        async with self._conn.execute(
-            "SELECT * FROM appointments WHERE id = ?", (appointment_id,)
-        ) as cur:
-            r = await cur.fetchone()
-        return self._row_to_appointment(r) if r else None
+        return await self._appointments.get_by_id(appointment_id)
 
     async def create_appointment(
         self,
@@ -157,132 +68,60 @@ class AsyncDatabase:
         end_time: str,
         notes: str = "",
     ) -> None:
-        """Insert a new appointment."""
-        from datetime import datetime
+        from agent.database.models import AppointmentStatus
 
         created_at = datetime.utcnow().isoformat() + "Z"
-        await self._conn.execute(
-            """INSERT INTO appointments
-               (id, doctor_id, patient_name, patient_phone, appointment_date,
-                start_time, end_time, status, created_at, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?)""",
-            (
-                appointment_id,
-                doctor_id,
-                patient_name,
-                patient_phone,
-                date,
-                start_time,
-                end_time,
-                created_at,
-                notes,
-            ),
+        apt = Appointment(
+            id=appointment_id,
+            doctor_id=doctor_id,
+            patient_name=patient_name,
+            patient_phone=patient_phone,
+            appointment_date=date,
+            start_time=start_time,
+            end_time=end_time,
+            status=AppointmentStatus.BOOKED,
+            created_at=created_at,
+            notes=notes,
         )
-        await self._conn.commit()
+        await self._appointments.create(apt)
 
     async def update_appointment_status(
         self, appointment_id: str, status: str
     ) -> bool:
-        """Update appointment status (e.g. to 'cancelled')."""
-        cur = await self._conn.execute(
-            "UPDATE appointments SET status = ? WHERE id = ?",
-            (status, appointment_id),
-        )
-        await self._conn.commit()
-        return cur.rowcount > 0
+        return await self._appointments.update_status(appointment_id, status)
 
     async def reschedule_appointment(
         self, appointment_id: str, new_date: str, new_time: str, new_end_time: str
     ) -> bool:
-        """Reschedule an appointment."""
-        cur = await self._conn.execute(
-            """UPDATE appointments
-               SET appointment_date = ?, start_time = ?, end_time = ?
-               WHERE id = ?""",
-            (new_date, new_time, new_end_time, appointment_id),
-        )
-        await self._conn.commit()
-        return cur.rowcount > 0
-
-    def _row_to_appointment(self, r) -> Appointment:
-        return Appointment(
-            id=r["id"],
-            doctor_id=r["doctor_id"],
-            patient_name=r["patient_name"],
-            patient_phone=r["patient_phone"],
-            appointment_date=r["appointment_date"],
-            start_time=r["start_time"],
-            end_time=r["end_time"],
-            status=r["status"],
-            created_at=r["created_at"],
-            notes=r["notes"] or "",
+        return await self._appointments.reschedule(
+            appointment_id, new_date, new_time, new_end_time
         )
 
     # ——— Callers ———
     async def get_caller_by_phone(self, phone_number: str) -> Caller | None:
-        """Look up caller by phone."""
-        async with self._conn.execute(
-            "SELECT * FROM callers WHERE phone_number = ?", (phone_number,)
-        ) as cur:
-            r = await cur.fetchone()
-        if r is None:
-            return None
-        return Caller(
-            id=r["id"],
-            phone_number=r["phone_number"],
-            name=r["name"] or "",
-            last_call_at=r["last_call_at"],
-            preferences=json.loads(r["preferences"] or "{}"),
-            call_count=r["call_count"],
-        )
+        return await self._callers.get_by_phone(phone_number)
 
     async def upsert_caller(
         self, phone_number: str, name: str = "", preferences: dict | None = None
     ) -> None:
-        """Create or update a caller record."""
-        from datetime import datetime
-
-        now = datetime.utcnow().isoformat() + "Z"
-        prefs = json.dumps(preferences or {})
-
-        await self._conn.execute(
-            """INSERT INTO callers (phone_number, name, last_call_at, preferences, call_count)
-               VALUES (?, ?, ?, ?, 1)
-               ON CONFLICT(phone_number) DO UPDATE SET
-                 name = COALESCE(excluded.name, name),
-                 last_call_at = excluded.last_call_at,
-                 call_count = call_count + 1,
-                 preferences = COALESCE(excluded.preferences, preferences)""",
-            (phone_number, name, now, prefs),
-        )
-        await self._conn.commit()
+        await self._callers.upsert(phone_number, name, preferences)
 
     async def update_caller_preferences(
         self, phone_number: str, key: str, value: str
     ) -> bool:
-        """Update a caller's preference."""
-        caller = await self.get_caller_by_phone(phone_number)
-        if not caller:
-            return False
-        prefs = caller.preferences.copy()
-        prefs[key] = value
-        await self._conn.execute(
-            "UPDATE callers SET preferences = ? WHERE phone_number = ?",
-            (json.dumps(prefs), phone_number),
-        )
-        await self._conn.commit()
-        return True
+        return await self._callers.update_preferences(phone_number, key, value)
 
     # ——— Clinic info ———
     async def get_clinic_info(self, key: str) -> str | None:
-        """Get a clinic info value by key (from cache)."""
-        return self._clinic_cache.get(key)
+        return await self._clinic.get(key)
 
     async def set_clinic_info(self, key: str, value: str) -> None:
-        """Set a clinic info value."""
-        await self._conn.execute(
-            """INSERT INTO clinic_info (key, value) VALUES (?, ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (key, value),
-        )
-        await self._conn.commit()
+        await self._clinic.set(key, value)
+
+    async def close(self) -> None:
+        """No-op: connection lifecycle is managed by db_manager in main."""
+        pass
+
+
+# Legacy name for code that might reference AsyncDatabase
+AsyncDatabase = SharedDbAdapter

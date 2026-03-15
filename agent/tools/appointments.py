@@ -1,45 +1,19 @@
 """
-Appointment tools for Aria — check availability, book, reschedule, cancel.
-Each tool is an async function compatible with Pipecat's function-calling.
+Appointment tools — optimized for voice latency.
+Tool results are near-speakable sentences so the LLM can relay them naturally.
 """
-import random
-from difflib import get_close_matches
+import uuid
 from datetime import date, datetime, timedelta
 
 from agent.database.db import get_shared_db
-from agent.database.models import Doctor
 
 
-def _fuzzy_doctor_matches(query: str, all_doctors: list[Doctor], limit: int = 3) -> list[Doctor]:
-    """Return closest doctor matches by name or specialization when exact match fails."""
-    q = query.lower().strip()
-    if not q:
-        return []
-    names = [d.name for d in all_doctors]
-    specs = list({d.specialization for d in all_doctors})
-    candidates = names + specs
-    matches = get_close_matches(q, [c.lower() for c in candidates], n=limit * 2, cutoff=0.4)
-    result = []
-    seen_ids = set()
-    for m in matches:
-        for d in all_doctors:
-            if d.id not in seen_ids and (m == d.name.lower() or m == d.specialization.lower()):
-                result.append(d)
-                seen_ids.add(d.id)
-                if len(result) >= limit:
-                    return result
-    # Fallback: any doctor if query is very short or partial
-    if not result and all_doctors:
-        for d in all_doctors:
-            if q[0] in d.name.lower() or q[:3] in d.specialization.lower():
-                result.append(d)
-                if len(result) >= limit:
-                    break
-    return result[:limit]
+def generate_appointment_id() -> str:
+    """Format: APT-XXXXXX (6 hex chars from UUID)."""
+    return f"APT-{uuid.uuid4().hex[:6].upper()}"
 
 
 def _parse_date(s: str) -> date | None:
-    """Parse date string (YYYY-MM-DD or 'next available') to date object."""
     s = (s or "").strip().lower()
     if not s or s == "next available":
         return None
@@ -53,12 +27,11 @@ def _time_str(h: int, m: int = 0) -> str:
     return f"{h:02d}:{m:02d}:00"
 
 
-def _format_time_display(t: str) -> str:
+def _format_time(t: str) -> str:
     """Convert HH:MM:SS to natural '10:30 AM'."""
     try:
         parts = t.split(":")
-        h = int(parts[0])
-        m = int(parts[1]) if len(parts) > 1 else 0
+        h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
         if h == 0:
             return f"12:{m:02d} AM"
         if h < 12:
@@ -70,163 +43,144 @@ def _format_time_display(t: str) -> str:
         return t
 
 
-def _format_date_display(d: date) -> str:
-    """e.g. Jan 15."""
-    return d.strftime("%b %d")
+def _format_date(d: date) -> str:
+    """e.g. 'Wednesday January 15th' — speakable."""
+    day = d.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{d.strftime('%A')} {d.strftime('%B')} {day}{suffix}"
 
 
-def _is_weekend_request(date_str: str) -> bool:
-    """Check if user requested a weekend day (we're weekdays-only)."""
-    s = (date_str or "").strip().lower()
-    return any(d in s for d in ["saturday", "sunday", "sat", "sun"])
+def _next_weekdays(start: date, count: int) -> list[date]:
+    days = []
+    for i in range(14):
+        d = start + timedelta(days=i)
+        if d.weekday() < 5:
+            days.append(d)
+            if len(days) >= count:
+                break
+    return days
+
+
+def _pick_spread_slots(slots: list[tuple[date, str]], max_slots: int = 3) -> list[tuple[date, str]]:
+    """Pick slots spread across morning/midday/afternoon."""
+    if len(slots) <= max_slots:
+        return slots
+    morning = [(d, t) for d, t in slots if t < "11:00:00"]
+    midday = [(d, t) for d, t in slots if "11:00:00" <= t < "14:00:00"]
+    afternoon = [(d, t) for d, t in slots if t >= "14:00:00"]
+    picked = []
+    for bucket in [morning, midday, afternoon]:
+        if bucket and len(picked) < max_slots:
+            picked.append(bucket[0])
+    remaining = [s for s in slots if s not in picked]
+    while len(picked) < max_slots and remaining:
+        picked.append(remaining.pop(0))
+    return sorted(picked, key=lambda x: (x[0], x[1]))
 
 
 async def check_availability(doctor_name_or_specialization: str, preferred_date: str = "next available") -> str:
     """
-    Check available appointment slots for a doctor.
-
-    Args:
-        doctor_name_or_specialization: Doctor name (e.g. "Dr. Chen") or specialization (e.g. "dermatology").
-        preferred_date: Preferred date as YYYY-MM-DD, or "next available" for next 3 business days.
+    Returns a SPEAKABLE sentence with 2-3 available slots.
+    The LLM can relay this almost word-for-word.
     """
     db = await get_shared_db()
     doctors = await db.get_doctors_by_name_or_specialization(doctor_name_or_specialization)
 
-    # Fuzzy match when no exact match — return closest options for LLM to offer
     if not doctors:
-        all_doctors = await db.get_all_doctors()
-        fuzzy = _fuzzy_doctor_matches(doctor_name_or_specialization, all_doctors, limit=3)
-        if fuzzy:
-            opts = ", ".join(f"{d.name} ({d.specialization})" for d in fuzzy)
-            return f"No exact match for '{doctor_name_or_specialization}'. Closest options: {opts}. Which one did you mean?"
-        return "No doctor found. We have General, Cardiology, Dermatology, and Pediatrics. Which specialty or doctor would you like?"
+        return "I don't have a doctor matching that. We have Dr. Chen for general practice, Dr. Okafor for cardiology, Dr. Rodriguez for dermatology, and Dr. Kim for pediatrics."
 
-    # Weekend requested but doctors are weekdays-only
-    if _is_weekend_request(preferred_date):
-        today = date.today()
-        next_fri = today
-        while next_fri.weekday() != 4:
-            next_fri += timedelta(days=1)
-        next_mon = next_fri + timedelta(days=3)
-        return f"Our doctors aren't available on weekends. Would you like Friday {next_fri.strftime('%b %d')} or Monday {next_mon.strftime('%b %d')} instead?"
-
-    slot_duration = 30
-    start_hour, end_hour = 9, 17
-
-    # Determine which dates to check
     today = date.today()
     if preferred_date and preferred_date.lower() != "next available":
         target = _parse_date(preferred_date)
-        if target:
-            dates_to_check = [target]
-        else:
-            dates_to_check = []
-            for i in range(10):
-                d = today + timedelta(days=i)
-                if d.weekday() < 5:
-                    dates_to_check.append(d)
-                    if len(dates_to_check) >= 3:
-                        break
+        dates_to_check = [target] if target else _next_weekdays(today, 5)
     else:
-        dates_to_check = []
-        for i in range(14):
-            d = today + timedelta(days=i)
-            if d.weekday() < 5:
-                dates_to_check.append(d)
-                if len(dates_to_check) >= 3:
-                    break
+        dates_to_check = _next_weekdays(today, 5)
 
     if not dates_to_check:
-        return "I couldn't find any weekdays to check. Please specify a date."
+        return "I couldn't figure out which dates to check. Could you give me a specific date?"
 
-    results = []
     for doc in doctors:
+        all_slots = []
         for d in dates_to_check:
-            day_name = d.strftime("%A")
-            if day_name not in doc.available_days:
+            if d.strftime("%A") not in doc.available_days:
                 continue
 
             existing = await db.get_appointments_by_doctor_and_date(doc.id, d.isoformat())
-            booked_times = {
-                (a.start_time, a.end_time)
-                for a in existing
-            }
+            booked_starts = {a.start_time for a in existing}
 
-            slots = []
-            t = datetime.combine(d, datetime.min.time().replace(hour=start_hour, minute=0))
-            end_dt = datetime.combine(d, datetime.min.time().replace(hour=end_hour, minute=0))
-            while t + timedelta(minutes=slot_duration) <= end_dt:
+            t = datetime.combine(d, datetime.min.time().replace(hour=9))
+            end_dt = datetime.combine(d, datetime.min.time().replace(hour=17))
+            while t + timedelta(minutes=30) <= end_dt:
                 start_s = _time_str(t.hour, t.minute)
-                end_s = _time_str((t + timedelta(minutes=slot_duration)).hour, (t + timedelta(minutes=slot_duration)).minute)
-                if (start_s, end_s) not in booked_times:
-                    slots.append((d, start_s, _format_time_display(start_s)))
-                t += timedelta(minutes=slot_duration)
+                if start_s not in booked_starts:
+                    all_slots.append((d, start_s))
+                t += timedelta(minutes=30)
 
-            if slots:
-                by_date = {}
-                for d, _, disp in slots:
-                    key = d.isoformat()
-                    if key not in by_date:
-                        by_date[key] = []
-                    by_date[key].append(disp)
-                for iso_date in sorted(by_date.keys()):
-                    dt = datetime.strptime(iso_date, "%Y-%m-%d").date()
-                    times = ", ".join(sorted(by_date[iso_date], key=lambda x: x))
-                    results.append(f"{doc.name} on {_format_date_display(dt)}: {times}")
+            if len(all_slots) >= 6:
+                break
 
-    if not results:
-        all_docs = await db.get_all_doctors()
-        others = [d.name for d in all_docs if d.id != doctors[0].id][:2]
-        opts = f"Would you like me to check Friday, try next week, or book with {others[0]}" + (f" or {others[1]}" if len(others) > 1 else "") + "?"
-        return f"{doctors[0].name} doesn't have openings for those dates. {opts}"
+        picked = _pick_spread_slots(all_slots, max_slots=3)
 
-    return "Available slots: " + "; ".join(results[:3])
+        if picked:
+            slot_parts = []
+            for d, time_s in picked:
+                slot_parts.append(f"{_format_date(d)} at {_format_time(time_s)}")
+
+            if len(slot_parts) == 1:
+                slots_text = slot_parts[0]
+            elif len(slot_parts) == 2:
+                slots_text = f"{slot_parts[0]} and {slot_parts[1]}"
+            else:
+                slots_text = f"{slot_parts[0]}, {slot_parts[1]}, and {slot_parts[2]}"
+
+            return f"{doc.name} has openings on {slots_text}. Doctor ID is {doc.id}."
+
+    doc_name = doctors[0].name
+    return f"{doc_name} is fully booked for the dates I checked. Want me to check a different week or another doctor?"
 
 
 async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str, date: str, time: str, notes: str = "") -> str:
-    """
-    Book an appointment.
-
-    Args:
-        doctor_id: ID of the doctor (1-4).
-        patient_name: Patient's full name.
-        patient_phone: Patient's phone number.
-        date: Date as YYYY-MM-DD.
-        time: Time as HH:MM or HH:MM:SS.
-        notes: Optional notes (e.g. reason for visit).
-    """
+    """Returns a SPEAKABLE confirmation the LLM can relay directly."""
     db = await get_shared_db()
+
+    if doctor_id <= 0:
+        return "I need to know which doctor. Could you tell me the doctor's name or specialty?"
+
     doctor = await db.get_doctor_by_id(doctor_id)
     if not doctor:
-        all_doctors = await db.get_all_doctors()
-        fuzzy = _fuzzy_doctor_matches(str(doctor_id), all_doctors, limit=3)
-        if fuzzy:
-            opts = ", ".join(f"{d.name} ({d.specialization})" for d in fuzzy)
-            return f"That doctor ID wasn't found. Did you mean one of these? {opts}"
-        return "That doctor isn't in our system. We have General, Cardiology, Dermatology, and Pediatrics. Which would you like?"
+        return "I couldn't find that doctor. Could you tell me which doctor you'd like?"
 
-    # Normalize time
+    if not patient_name.strip():
+        return "I'll need your full name to book the appointment."
+
+    if not patient_phone.strip():
+        return "I'll need a phone number for the appointment."
+
+    time = time.strip()
     if len(time) == 5:
-        time = time + ":00"
-    start_time = time
-    start_dt = datetime.strptime(time, "%H:%M:%S")
+        time += ":00"
+
+    try:
+        start_dt = datetime.strptime(time, "%H:%M:%S")
+    except ValueError:
+        return f"I couldn't understand the time {time}. Could you say it like 10:30?"
+
     end_dt = start_dt + timedelta(minutes=30)
     end_time = _time_str(end_dt.hour, end_dt.minute)
 
-    # Verify slot still available
     existing = await db.get_appointments_by_doctor_and_date(doctor_id, date)
     for a in existing:
-        if a.start_time == start_time:
-            return "I'm sorry, that slot was just taken. Let me find another for you."
+        if a.start_time == time:
+            return "That slot was just taken. Let me check what else is available."
 
-    apt_id = f"APT-{random.randint(1000, 9999)}"
+    apt_id = generate_appointment_id()
     await db.create_appointment(
         appointment_id=apt_id,
         doctor_id=doctor_id,
         patient_name=patient_name,
         patient_phone=patient_phone,
         date=date,
-        start_time=start_time,
+        start_time=time,
         end_time=end_time,
         notes=notes,
     )
@@ -234,56 +188,56 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
     await db.update_caller_preferences(patient_phone, "last_doctor", doctor.name)
 
     d = datetime.strptime(date, "%Y-%m-%d").date()
-    return f"Appointment booked: {doctor.name} on {d.strftime('%A')} {_format_date_display(d)} at {_format_time_display(start_time)} for {patient_name}. Appointment ID: {apt_id}."
+
+    return (
+        f"All set! {patient_name} is booked with {doctor.name} "
+        f"on {_format_date(d)} at {_format_time(time)}. "
+        f"The appointment ID is {apt_id}."
+    )
 
 
 async def reschedule_appointment(appointment_id: str, new_date: str, new_time: str) -> str:
-    """
-    Reschedule an existing appointment.
-
-    Args:
-        appointment_id: The appointment ID (e.g. APT-1234).
-        new_date: New date as YYYY-MM-DD.
-        new_time: New time as HH:MM or HH:MM:SS.
-    """
+    """Returns a SPEAKABLE confirmation."""
     db = await get_shared_db()
     apt = await db.get_appointment_by_id(appointment_id)
     if not apt:
-        return f"I couldn't find appointment {appointment_id}. Please check the ID."
+        return f"I couldn't find appointment {appointment_id}. Could you double-check that ID?"
 
     if len(new_time) == 5:
-        new_time = new_time + ":00"
-    end_dt = datetime.strptime(new_time, "%H:%M:%S") + timedelta(minutes=30)
+        new_time += ":00"
+
+    try:
+        end_dt = datetime.strptime(new_time, "%H:%M:%S") + timedelta(minutes=30)
+    except ValueError:
+        return f"I couldn't understand the time {new_time}. Could you say it like 2:30?"
+
     new_end = _time_str(end_dt.hour, end_dt.minute)
 
-    # Verify new slot available
     existing = await db.get_appointments_by_doctor_and_date(apt.doctor_id, new_date)
     for a in existing:
         if a.id != appointment_id and a.start_time == new_time:
-            return "That slot is no longer available. Let me find another."
+            return "That slot isn't available. Want me to check other times?"
 
     doctor = await db.get_doctor_by_id(apt.doctor_id)
-    old_info = f"{apt.appointment_date} at {_format_time_display(apt.start_time)}"
     await db.reschedule_appointment(appointment_id, new_date, new_time, new_end)
 
     d = datetime.strptime(new_date, "%Y-%m-%d").date()
-    return f"Rescheduled! {doctor.name if doctor else 'Your'} appointment is now on {d.strftime('%A')} {_format_date_display(d)} at {_format_time_display(new_time)}. (Previously: {old_info})"
+    doc_name = doctor.name if doctor else "Your doctor"
+
+    return (
+        f"Done! Your appointment with {doc_name} has been moved to "
+        f"{_format_date(d)} at {_format_time(new_time)}."
+    )
 
 
 async def cancel_appointment(appointment_id: str, reason: str = "") -> str:
-    """
-    Cancel an appointment.
-
-    Args:
-        appointment_id: The appointment ID (e.g. APT-1234).
-        reason: Optional reason for cancellation.
-    """
+    """Returns a SPEAKABLE confirmation."""
     db = await get_shared_db()
     apt = await db.get_appointment_by_id(appointment_id)
     if not apt:
-        return f"I couldn't find appointment {appointment_id}. Please check the ID."
+        return f"I couldn't find appointment {appointment_id}. Could you double-check that ID?"
 
     success = await db.update_appointment_status(appointment_id, "cancelled")
     if success:
-        return f"Appointment {appointment_id} has been cancelled. We hope to see you soon!"
-    return f"I had trouble cancelling {appointment_id}. Please call our front desk."
+        return f"Appointment {appointment_id} has been cancelled. If you need to rebook, just let me know."
+    return f"I had trouble cancelling that. Let me transfer you to our front desk."

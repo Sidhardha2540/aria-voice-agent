@@ -7,13 +7,17 @@ requires-python = ">=3.11"
 dependencies = [
     # NumPy<2 for SciPy/pyloudnorm compatibility (pipecat VAD)
     "numpy<2",
-    # SmallWebRTC — peer-to-peer, no API keys, works on all platforms
+    # Config and validation
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    # Voice pipeline
     "pipecat-ai[deepgram,cartesia,openai,silero,webrtc,runner]>=0.0.50",
     "groq>=0.4.0",
     "aiosqlite>=0.19.0",
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
     "logfire>=0.1.0",
+    "asyncpg>=0.29.0",
 ]
 
 [project.optional-dependencies]
@@ -34,3 +38,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
