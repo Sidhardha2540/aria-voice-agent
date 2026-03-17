@@ -94,10 +94,10 @@ def classify_by_keywords(text: str, previous_turn_had_error: bool = False) -> In
 
 
 def _sync_classify_by_llm(text: str, api_key: str, model_fast: str) -> Intent:
-    """Sync Groq call — run via executor to avoid blocking event loop."""
-    from groq import Groq
+    """Sync OpenAI call — run via executor to avoid blocking event loop."""
+    from openai import OpenAI
 
-    client = Groq(api_key=api_key)
+    client = OpenAI(api_key=api_key)
     prompt = f'Classify as SIMPLE or COMPLEX. Reply with only one word.\nUser: "{text[:200]}"'
     resp = client.chat.completions.create(
         model=model_fast,
@@ -165,7 +165,7 @@ class IntentRouter(FrameProcessor):
 
     async def process_frame(self, frame, direction):
         from pipecat.frames.frames import LLMUpdateSettingsFrame
-        from pipecat.services.groq.llm import GroqLLMService
+        from pipecat.services.openai.llm import OpenAILLMService
 
         await super().process_frame(frame, direction)
 
@@ -187,7 +187,7 @@ class IntentRouter(FrameProcessor):
                 intent = classify_by_keywords(last_user)
 
             model = self._model_fast if intent == "simple" else self._model_smart
-            label = "8b-instant" if "8b" in model else "70b"
+            label = "gpt-4o-mini" if "mini" in model else "gpt-4o"
             logger.info("[LLM] Model: %s (%s)", label, intent)
 
             m = self._metrics_ref.get("metrics")
@@ -195,7 +195,7 @@ class IntentRouter(FrameProcessor):
                 m.set_model_used(label)
 
             await self.push_frame(
-                LLMUpdateSettingsFrame(settings=GroqLLMService.Settings(model=model)),
+                LLMUpdateSettingsFrame(settings=OpenAILLMService.Settings(model=model)),
                 direction,
             )
 

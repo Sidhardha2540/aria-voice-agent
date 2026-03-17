@@ -18,17 +18,17 @@ if _env_file.exists():
 class Settings(BaseSettings):
     # Required — app MUST NOT start without these (set in .env)
     deepgram_api_key: str
-    groq_api_key: str
+    openai_api_key: str
     cartesia_api_key: str
 
     # Optional with validated defaults
     cartesia_voice_id: str = "b7d50908-b17c-442d-ad8d-810c63997ed9"
-    groq_model: str = "llama-3.1-8b-instant"
+    openai_model: str = "gpt-4o-mini"
 
-    # Dual-LLM routing (optional)
+    # Dual-LLM routing (optional): fast model for simple turns, smart for complex
     enable_dual_llm: bool = False
-    groq_model_fast: str = "llama-3.1-8b-instant"
-    groq_model_smart: str = "llama-3.3-70b-versatile"
+    openai_model_fast: str = "gpt-4o-mini"
+    openai_model_smart: str = "gpt-4o"
     use_llm_classifier: bool = True
 
     # Latency tuning — validated ranges (DIAGNOSIS: 500/200 for faster turn-taking)
@@ -64,8 +64,10 @@ class Settings(BaseSettings):
     # Backchanneling (TODO)
     enable_backchanneling: bool = False
 
-    # Optional API keys for other transports
-    openai_api_key: str | None = None
+    # Learn from every call: record outcomes and inject recent learnings into system prompt
+    enable_learn_from_feedback: bool = True
+    feedback_max_entries: int = Field(default=50, ge=5, le=200)
+    feedback_max_chars: int = Field(default=600, ge=200, le=2000)
 
     model_config = {
         "env_file": str(_env_file) if _env_file.exists() else None,
@@ -89,7 +91,7 @@ class Settings(BaseSettings):
             raise ValueError("database_url must start with sqlite or postgresql")
         return v
 
-    @field_validator("deepgram_api_key", "groq_api_key", "cartesia_api_key")
+    @field_validator("deepgram_api_key", "openai_api_key", "cartesia_api_key")
     @classmethod
     def required_api_keys_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
@@ -104,20 +106,20 @@ settings = Settings()
 def __getattr__(name: str):
     if name == "DEEPGRAM_API_KEY":
         return settings.deepgram_api_key
-    if name == "GROQ_API_KEY":
-        return settings.groq_api_key
+    if name == "OPENAI_API_KEY":
+        return settings.openai_api_key
     if name == "CARTESIA_API_KEY":
         return settings.cartesia_api_key
     if name == "CARTESIA_VOICE_ID":
         return settings.cartesia_voice_id
-    if name == "GROQ_MODEL":
-        return settings.groq_model
+    if name == "OPENAI_MODEL":
+        return settings.openai_model
     if name == "ENABLE_DUAL_LLM":
         return settings.enable_dual_llm
-    if name == "GROQ_MODEL_FAST":
-        return settings.groq_model_fast
-    if name == "GROQ_MODEL_SMART":
-        return settings.groq_model_smart
+    if name == "OPENAI_MODEL_FAST":
+        return settings.openai_model_fast
+    if name == "OPENAI_MODEL_SMART":
+        return settings.openai_model_smart
     if name == "USE_LLM_CLASSIFIER":
         return settings.use_llm_classifier
     if name == "DEEPGRAM_UTTERANCE_END_MS":
@@ -145,6 +147,10 @@ def __getattr__(name: str):
         return settings.logfire_token or ""
     if name == "ENABLE_BACKCHANNELING":
         return settings.enable_backchanneling
-    if name == "OPENAI_API_KEY":
-        return settings.openai_api_key or ""
+    if name == "ENABLE_LEARN_FROM_FEEDBACK":
+        return settings.enable_learn_from_feedback
+    if name == "FEEDBACK_MAX_ENTRIES":
+        return settings.feedback_max_entries
+    if name == "FEEDBACK_MAX_CHARS":
+        return settings.feedback_max_chars
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

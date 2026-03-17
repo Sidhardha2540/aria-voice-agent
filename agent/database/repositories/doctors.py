@@ -41,9 +41,16 @@ class DoctorRepository:
     async def get_by_name_or_specialization(self, query: str) -> list[Doctor]:
         all_doctors = await self.get_all()
         q = query.lower().strip()
+        if not q:
+            return []
+        # Match: query in name/spec, spec in query (e.g. "general" in "general practice"),
+        # or any word of query in name (e.g. "chen" matches "Dr. Sarah Chen")
+        words = set(q.split())
         return [
             d for d in all_doctors
-            if q in d.name.lower() or q in d.specialization.lower()
+            if (q in d.name.lower() or q in d.specialization.lower()
+                or d.specialization.lower() in q
+                or any(w in d.name.lower() or w in d.specialization.lower() for w in words))
         ]
 
     def _row_to_doctor(self, row: dict) -> Doctor:

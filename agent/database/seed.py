@@ -35,7 +35,7 @@ async def seed() -> None:
     # 4 doctors
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
     for name, specialization in [
-        ("Dr. Sarah Chen", "General"),
+        ("Dr. Sarah Chen", "General Practice"),
         ("Dr. Michael Okafor", "Cardiology"),
         ("Dr. Emily Rodriguez", "Dermatology"),
         ("Dr. James Kim", "Pediatrics"),

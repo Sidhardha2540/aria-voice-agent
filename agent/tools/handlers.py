@@ -4,6 +4,8 @@ Every handler is wrapped in safe_tool_call so exceptions become spoken errors.
 
 Handlers receive raw LLM arguments: use safe_int/safe_str for all inputs.
 """
+import asyncio
+
 from agent.core.errors import safe_int, safe_str, safe_tool_call
 from agent.services import appointments, caller_memory, clinic_info, escalation
 
@@ -27,6 +29,9 @@ def create_tool_handlers(
                 safe_str(args.get("doctor_name_or_specialization"), ""),
                 safe_str(args.get("preferred_date"), "next available"),
             )
+            # Never send empty result — pipeline must have something to speak
+            if not (result and str(result).strip()):
+                result = "I'm having trouble checking the schedule right now. Let me transfer you to our front desk so they can help."
             await p.result_callback(result)
         await safe_tool_call("check_availability", _inner, params, session_id)
 
@@ -113,6 +118,19 @@ def create_tool_handlers(
             await p.result_callback(result)
         await safe_tool_call("escalate_to_human", _inner, params, session_id)
 
+    async def _end_call(params):
+        async def _inner(p):
+            result = "You're all set. Have a great day!"
+            await p.result_callback(result)
+            # Disconnect after a short delay so the goodbye is spoken first
+            task = metrics_ref.get("task") if metrics_ref else None
+            if task:
+                async def _disconnect_later():
+                    await asyncio.sleep(2.0)
+                    await task.cancel()
+                asyncio.create_task(_disconnect_later())
+        await safe_tool_call("end_call", _inner, params, session_id)
+
     return {
         "check_availability": _check_availability,
         "book_appointment": _book_appointment,
@@ -122,4 +140,5 @@ def create_tool_handlers(
         "lookup_caller": _lookup_caller,
         "save_caller": _save_caller,
         "escalate_to_human": _escalate_to_human,
+        "end_call": _end_call,
     }

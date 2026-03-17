@@ -9,10 +9,10 @@ from agent.config import (
     DEEPGRAM_ENDPOINTING,
     DEEPGRAM_UTTERANCE_END_MS,
     ENABLE_DUAL_LLM,
-    GROQ_API_KEY,
-    GROQ_MODEL,
-    GROQ_MODEL_FAST,
-    GROQ_MODEL_SMART,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OPENAI_MODEL_FAST,
+    OPENAI_MODEL_SMART,
     LLM_MAX_TOKENS,
     LLM_TEMPERATURE,
     TTS_LOW_LATENCY,
@@ -36,7 +36,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.groq.llm import GroqLLMService
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.tts_service import TextAggregationMode
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
     TranscriptionUserTurnStartStrategy,
@@ -53,10 +53,10 @@ except ImportError:
 def create_pipeline(transport, metrics_ref: dict):
     """Build the Pipecat pipeline with STT, LLM, TTS, and tools. Returns (pipeline, context)."""
     logger.info(
-        "[CONFIG] Latency: utterance_end_ms=%s endpointing=%s model=%s tts_low_latency=%s",
+        "[CONFIG] Latency: utterance_end_ms={} endpointing={} model={} tts_low_latency={}",
         DEEPGRAM_UTTERANCE_END_MS,
         DEEPGRAM_ENDPOINTING,
-        GROQ_MODEL,
+        OPENAI_MODEL,
         TTS_LOW_LATENCY,
     )
 
@@ -81,10 +81,10 @@ def create_pipeline(transport, metrics_ref: dict):
         ),
     )
 
-    initial_model = GROQ_MODEL_FAST if ENABLE_DUAL_LLM else GROQ_MODEL
-    llm = GroqLLMService(
-        api_key=GROQ_API_KEY,
-        settings=GroqLLMService.Settings(
+    initial_model = OPENAI_MODEL_FAST if ENABLE_DUAL_LLM else OPENAI_MODEL
+    llm = OpenAILLMService(
+        api_key=OPENAI_API_KEY,
+        settings=OpenAILLMService.Settings(
             model=initial_model,
             temperature=LLM_TEMPERATURE,
             max_completion_tokens=LLM_MAX_TOKENS,
@@ -170,9 +170,9 @@ def create_pipeline(transport, metrics_ref: dict):
     if ENABLE_DUAL_LLM:
         intent_router = IntentRouter(
             context,
-            model_fast=GROQ_MODEL_FAST,
-            model_smart=GROQ_MODEL_SMART,
-            api_key=GROQ_API_KEY,
+            model_fast=OPENAI_MODEL_FAST,
+            model_smart=OPENAI_MODEL_SMART,
+            api_key=OPENAI_API_KEY,
             metrics_ref=metrics_ref,
             use_llm_classifier=USE_LLM_CLASSIFIER,
         )

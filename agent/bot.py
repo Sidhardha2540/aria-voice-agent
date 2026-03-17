@@ -5,12 +5,14 @@ Transport is created by the factory (webrtc/twilio/daily); pipeline is built in 
 from agent.config import (
     ENABLE_BACKCHANNELING,
     ENABLE_DUAL_LLM,
-    GROQ_MODEL,
+    OPENAI_MODEL,
 )
 from agent.core.pipeline import create_pipeline
 from agent.prompts import GREETING_PROMPT
 from agent.transport.factory import create_transport
 from agent.metrics import CallMetrics, log_and_persist_metrics, parse_breakdown_events
+from agent.learning import record_feedback
+from agent.latency_tracker import LatencyTracker
 from loguru import logger
 from pipecat.frames.frames import ClientConnectedFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
@@ -29,8 +31,8 @@ async def run_bot(transport):
     await _prewarm_db()
     if ENABLE_BACKCHANNELING:
         logger.warning("[BACKCHANNEL] ENABLE_BACKCHANNELING=true but not implemented; see agent/backchanneling.py TODO")
-    metrics_ref = {}
-    breakdown_ref = {}
+    metrics_ref: dict = {}
+    breakdown_ref: dict = {}
     pipeline, context = create_pipeline(transport, metrics_ref)
 
     latency_observer = UserBotLatencyObserver()
@@ -41,20 +43,44 @@ async def run_bot(transport):
 
     @latency_observer.event_handler("on_latency_measured")
     async def _on_latency(observer, latency_seconds):
-        logger.info(f"[LATENCY] User→Bot: {latency_seconds:.2f}s")
-        if latency_seconds > 0.3:
-            logger.warning("[LATENCY] Above 300ms target!")
-        m = metrics_ref.get("metrics")
-        if m:
-            b = breakdown_ref.pop("last", None)
-            breakdown = parse_breakdown_events(b) if b else None
-            m.record_turn(latency_seconds * 1000, breakdown)
+        # Store total; we'll compute and record "after STT" in _on_breakdown
+        breakdown_ref["last_latency_secs"] = latency_seconds
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def _on_breakdown(observer, breakdown):
         logger.info("[LATENCY] Breakdown:")
         for event in breakdown.chronological_events():
             logger.info(f"  {event}")
+        # Latency we report = only after STT (speaker stopped → transcript ready is excluded)
+        total_secs = breakdown_ref.pop("last_latency_secs", None)
+        user_turn_secs = getattr(breakdown, "user_turn_secs", None)
+        if total_secs is not None and user_turn_secs is not None:
+            after_stt_secs = max(0.0, total_secs - user_turn_secs)
+        else:
+            after_stt_secs = total_secs if total_secs is not None else 0.0
+        after_stt_ms = after_stt_secs * 1000
+        # Natural human gap between one person stopping and the other starting is ~200-300ms. Aim for that.
+        logger.info(f"[LATENCY] After STT: {after_stt_ms:.0f}ms (natural gap target: 200-300ms)")
+        if after_stt_ms <= 300:
+            logger.info("[LATENCY] Within natural gap — great.")
+        elif after_stt_ms <= 500:
+            logger.info("[LATENCY] Acceptable (under 500ms).")
+        else:
+            logger.warning(
+                "[LATENCY] Above 500ms: {:.0f}ms — aim for 200-300ms for natural feel.",
+                after_stt_ms,
+            )
+
+        m = metrics_ref.get("metrics")
+        parsed = parse_breakdown_events(breakdown) if breakdown is not None else {}
+        if m:
+            m.record_turn(after_stt_ms, parsed)
+
+        # Detailed per-turn latency report and JSONL log
+        tracker: LatencyTracker | None = metrics_ref.get("latency_tracker")
+        if tracker:
+            tracker.record_turn_from_breakdown(after_stt_ms, parsed)
+
         breakdown_ref["last"] = breakdown
 
     task = PipelineTask(
@@ -67,12 +93,18 @@ async def run_bot(transport):
             audio_out_sample_rate=16000,
         ),
     )
+    metrics_ref["task"] = task  # so end_call tool can disconnect when user is satisfied
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, webrtc_connection):
-        metrics_ref["metrics"] = CallMetrics()
+        metrics = CallMetrics()
+        metrics_ref["metrics"] = metrics
         if not ENABLE_DUAL_LLM:
-            metrics_ref["metrics"].set_model_used(GROQ_MODEL)
+            metrics.set_model_used(OPENAI_MODEL)
+
+        # Create latency tracker per call (session_id aligned with metrics)
+        tracker = LatencyTracker(session_id=metrics.session_id)
+        metrics_ref["latency_tracker"] = tracker
         # Push frames through pipeline: latency marker + greeting via TTS (bypasses LLM for consistent intro)
         await task.queue_frames([
             ClientConnectedFrame(),
@@ -82,8 +114,12 @@ async def run_bot(transport):
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, webrtc_connection):
         m = metrics_ref.pop("metrics", None)
+        tracker: LatencyTracker | None = metrics_ref.pop("latency_tracker", None)
         if m:
             log_and_persist_metrics(m)
+            record_feedback(m)
+        if tracker:
+            tracker.summarize_and_persist()
         await task.cancel()
 
     # handle_sigint=True so Ctrl+C cancels the pipeline and the process can exit cleanly
@@ -97,8 +133,8 @@ async def bot(runner_args: RunnerArguments):
         raise ValueError("This bot only supports SmallWebRTC. Run with: python -m agent.bot -t webrtc")
 
     from agent.config import settings
-    if not settings.deepgram_api_key or not settings.groq_api_key or not settings.cartesia_api_key:
-        raise ValueError("Missing API keys. Set DEEPGRAM_API_KEY, GROQ_API_KEY, CARTESIA_API_KEY in .env")
+    if not settings.deepgram_api_key or not settings.openai_api_key or not settings.cartesia_api_key:
+        raise ValueError("Missing API keys. Set DEEPGRAM_API_KEY, OPENAI_API_KEY, CARTESIA_API_KEY in .env")
 
     transport, _ = await create_transport(runner_args)
     await run_bot(transport)
@@ -130,13 +166,18 @@ def _register_exit_cleanup():
 
 if __name__ == "__main__":
     _register_exit_cleanup()
+    import sys
     from agent.config import settings
     logger.info(
-        "[CONFIG] Latency: utterance_end_ms=%s endpointing=%s model=%s tts_low_latency=%s",
+        "[CONFIG] Latency: utterance_end_ms={} endpointing={} model={} tts_low_latency={}",
         settings.deepgram_utterance_end_ms,
         settings.deepgram_endpointing,
-        settings.groq_model,
+        settings.openai_model,
         settings.tts_low_latency,
     )
+    # Use PORT from .env so a different port can be set when 7860 is in use
+    if "--port" not in sys.argv and settings.port != 7860:
+        sys.argv.extend(["--port", str(settings.port)])
+        logger.info("[CONFIG] Using port %s (set PORT in .env if 7860 is in use)", settings.port)
     from pipecat.runner.run import main
     main()

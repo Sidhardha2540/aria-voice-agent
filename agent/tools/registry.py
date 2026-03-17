@@ -85,7 +85,7 @@ def get_tool_schemas() -> ToolsSchema:
         ),
         FunctionSchema(
             name="escalate_to_human",
-            description="Transfer the call to human front desk staff. Use when: medical advice requested, billing questions, caller is upset and wants a person.",
+            description="Transfer the call to human front desk staff. Use ONLY when: medical advice requested, billing questions, caller explicitly asks to speak to a person, or complaint. Do NOT use when the caller is only correcting their name spelling or giving a small booking correction — continue the booking instead.",
             properties={
                 "reason": {"type": "string", "description": "Brief reason for the transfer"},
                 "caller_name": {"type": "string", "description": "Caller name if known"},
@@ -94,5 +94,11 @@ def get_tool_schemas() -> ToolsSchema:
                 "aria_tried": {"type": "string", "description": "What Aria already attempted"},
             },
             required=["reason"],
+        ),
+        FunctionSchema(
+            name="end_call",
+            description="End the call when the conversation is naturally finished and the caller is satisfied (said thanks, goodbye, that's all, or sounds done). Use after a brief sign-off. Do NOT use when escalating or when the caller might have more to ask.",
+            properties={},
+            required=[],
         ),
     ])

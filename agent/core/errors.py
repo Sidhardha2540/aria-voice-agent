@@ -9,8 +9,9 @@ from enum import Enum
 
 from loguru import logger
 
-# Max time per tool call — hung DB/API = spoken error, not frozen call (DIAGNOSIS R6)
-TOOL_CALL_TIMEOUT_SECONDS = 8.0
+# Max time per tool call — hung DB/API = spoken error, not frozen call
+# Slightly generous to avoid cutting off slow DB; pipeline stays responsive
+TOOL_CALL_TIMEOUT_SECONDS = 12.0
 
 
 class ErrorSeverity(Enum):
@@ -30,6 +31,7 @@ TOOL_ERROR_RESPONSES = {
     "lookup_caller": "I wasn't able to pull up your records, but no worries, I can still help you.",
     "save_caller": "I had a small issue saving that. I can still help you with your appointment.",
     "escalate_to_human": "I'm connecting you with our staff right now. Please hold for just a moment.",
+    "end_call": "Have a great day! You can hang up when you're ready.",
     "default": "I ran into a small issue. Let me connect you with our front desk to make sure you're taken care of.",
 }
 

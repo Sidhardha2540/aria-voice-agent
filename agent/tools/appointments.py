@@ -3,6 +3,7 @@ Appointment tools — optimized for voice latency.
 Tool results are near-speakable sentences so the LLM can relay them naturally.
 """
 import uuid
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 
 from agent.database.db import get_shared_db
@@ -78,13 +79,37 @@ def _pick_spread_slots(slots: list[tuple[date, str]], max_slots: int = 3) -> lis
     return sorted(picked, key=lambda x: (x[0], x[1]))
 
 
+def _normalize_doctor_query(query: str) -> str:
+    """Map vague or empty queries to a usable specialization so we don't return wrong doctor."""
+    q = (query or "").strip().lower()
+    if not q or q in ("doctor", "a doctor", "someone"):
+        return "general"
+    # Map common phrases to specialization for consistent routing
+    if any(w in q for w in ("skin", "dermatolog", "rash", "acne")):
+        return "dermatology"
+    if any(w in q for w in ("heart", "cardio", "chest", "blood pressure")):
+        return "cardiology"
+    if any(w in q for w in ("child", "pediatric", "kid")):
+        return "pediatrics"
+    return query.strip() or "general"
+
+
 async def check_availability(doctor_name_or_specialization: str, preferred_date: str = "next available") -> str:
     """
     Returns a SPEAKABLE sentence with 2-3 available slots.
-    The LLM can relay this almost word-for-word.
+    The LLM can relay this almost word-for-word. Never returns empty string.
     """
     db = await get_shared_db()
-    doctors = await db.get_doctors_by_name_or_specialization(doctor_name_or_specialization)
+    query = _normalize_doctor_query(doctor_name_or_specialization)
+    doctors = await db.get_doctors_by_name_or_specialization(query)
+
+    # When the query matches multiple doctors (e.g. "Dr" matches all), prefer the one
+    # whose name matches the query so we return that doctor's slots, not another's.
+    if len(doctors) > 1:
+        q = (query or "").lower().strip()
+        by_name = [d for d in doctors if q in d.name.lower() or d.name.lower() in q]
+        if by_name:
+            doctors = by_name
 
     if not doctors:
         return "I don't have a doctor matching that. We have Dr. Chen for general practice, Dr. Okafor for cardiology, Dr. Rodriguez for dermatology, and Dr. Kim for pediatrics."
@@ -156,6 +181,22 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
     if not patient_phone.strip():
         return "I'll need a phone number for the appointment."
 
+    # Ensure date uses current year if a past year was sent (e.g. 2024)
+    date_str = date.strip()
+    try:
+        parsed = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        today = date.today()
+        if parsed.year < today.year:
+            try:
+                parsed = parsed.replace(year=today.year)
+            except ValueError:
+                # e.g. Feb 29 in non-leap year
+                max_day = monthrange(today.year, parsed.month)[1]
+                parsed = parsed.replace(year=today.year, day=min(parsed.day, max_day))
+            date_str = parsed.isoformat()
+    except (ValueError, IndexError):
+        pass
+
     time = time.strip()
     if len(time) == 5:
         time += ":00"
@@ -168,7 +209,7 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
     end_dt = start_dt + timedelta(minutes=30)
     end_time = _time_str(end_dt.hour, end_dt.minute)
 
-    existing = await db.get_appointments_by_doctor_and_date(doctor_id, date)
+    existing = await db.get_appointments_by_doctor_and_date(doctor_id, date_str)
     for a in existing:
         if a.start_time == time:
             return "That slot was just taken. Let me check what else is available."
@@ -179,7 +220,7 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
         doctor_id=doctor_id,
         patient_name=patient_name,
         patient_phone=patient_phone,
-        date=date,
+        date=date_str,
         start_time=time,
         end_time=end_time,
         notes=notes,
@@ -187,7 +228,7 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
     await db.upsert_caller(patient_phone, patient_name)
     await db.update_caller_preferences(patient_phone, "last_doctor", doctor.name)
 
-    d = datetime.strptime(date, "%Y-%m-%d").date()
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
 
     return (
         f"All set! {patient_name} is booked with {doctor.name} "

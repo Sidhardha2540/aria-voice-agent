@@ -16,7 +16,7 @@ async def check_health() -> dict:
         "checks": {
             "database": {"status": "ok", "latency_ms": 2.1} | {"status": "error", "error": "..."},
             "deepgram": {"status": "ok"},
-            "groq": {"status": "ok"},
+            "openai": {"status": "ok"},
             "cartesia": {"status": "ok"},
         }
     }
@@ -37,7 +37,7 @@ async def check_health() -> dict:
 
     # API key presence (no external calls)
     checks["deepgram"] = {"status": "ok" if (settings.deepgram_api_key and settings.deepgram_api_key.strip()) else "missing_key"}
-    checks["groq"] = {"status": "ok" if (settings.groq_api_key and settings.groq_api_key.strip()) else "missing_key"}
+    checks["openai"] = {"status": "ok" if (settings.openai_api_key and settings.openai_api_key.strip()) else "missing_key"}
     checks["cartesia"] = {"status": "ok" if (settings.cartesia_api_key and settings.cartesia_api_key.strip()) else "missing_key"}
 
     statuses = [c["status"] for c in checks.values()]

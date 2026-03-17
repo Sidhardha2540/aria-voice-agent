@@ -190,5 +190,5 @@ async def _write_metrics_async(metrics_dict: dict, path: str) -> None:
 def log_and_persist_metrics(metrics: "CallMetrics", jsonl_path: str = "data/metrics.jsonl") -> None:
     """Log metrics as [CALL_METRICS] and schedule async write to file."""
     d = metrics.finalize()
-    logger.info("[CALL_METRICS] %s", json.dumps(d))
+    logger.info("[CALL_METRICS] {}", json.dumps(d))
     asyncio.create_task(_write_metrics_async(d, jsonl_path))
