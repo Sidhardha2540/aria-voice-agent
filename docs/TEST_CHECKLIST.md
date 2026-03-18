@@ -9,6 +9,11 @@
 | **reschedule_appointment** | Move existing appointment to new date/time | "I need to reschedule my appointment" → give APT-XXXXXX → new date and time. |
 | **cancel_appointment** | Cancel by appointment ID | "I want to cancel my appointment" → give APT-XXXXXX. |
 | **get_clinic_info** | Hours, address, insurance, parking, services | "What are your hours?" / "Do you take insurance?" / "Where are you located?" / "Parking?" |
+| **list_doctors** | Who's at the clinic (optionally by specialty) | "Who do you have?" / "Which doctors are there?" / "Do you have a dermatologist?" |
+| **get_my_appointments** | Caller's upcoming appointments by phone | "What appointments do I have?" / "When is my next visit?" → give phone. |
+| **request_medical_records** | Request a copy of records (pickup or send) | "I need my records sent" / "Can I get a copy of my records?" → confirm phone, name, email or pickup. |
+| **check_visit_instructions** | What to do before the visit (bring ID, fasting, etc.) | "What do I need to do before my appointment?" / "Any instructions before I come in?" |
+| **send_confirmation_reminder** | Request reminder for an appointment | "Can you send me a reminder?" / "I never got the confirmation" → give APT-XXXX. |
 | **lookup_caller** | See if caller has called before (by phone) | Give your phone number or say "I've called before" → bot can personalize. |
 | **save_caller** | Save/update caller name and phone | Done automatically after booking; or when you give name + phone. |
 | **escalate_to_human** | Transfer to front desk (ticket created) | "I need to speak to someone" / "Billing question" / medical advice / complaint. |
@@ -23,8 +28,13 @@
 3. **Reschedule** — "I need to reschedule APT-123456 to next Tuesday at 2" → reschedule_appointment.
 4. **Cancel** — "Cancel my appointment APT-123456" → cancel_appointment.
 5. **Returning caller** — Give phone when asked → lookup_caller (bot can say "Welcome back, …").
-6. **Escalate** — "I need to talk to a person" or "Billing question" → escalate_to_human.
-7. **Goodbye** — After any conclusion: "That's all, thanks" / "Goodbye" → end_call (bot disconnects).
+6. **My appointments** — "What appointments do I have?" → give phone → get_my_appointments.
+7. **List doctors** — "Who do you have?" or "Which dermatologists?" → list_doctors.
+8. **Visit instructions** — "What should I do before my appointment?" → check_visit_instructions.
+9. **Medical records** — "I need my records sent to my new doctor" → request_medical_records (phone, name, email/pickup).
+10. **Reminder** — "Send me a reminder for APT-123456" → send_confirmation_reminder.
+11. **Escalate** — "I need to talk to a person" or "Billing question" → escalate_to_human.
+12. **Goodbye** — After any conclusion: "That's all, thanks" / "Goodbye" → end_call (bot disconnects).
 
 ---
 

@@ -73,6 +73,7 @@ async def seed() -> None:
         ("services", "General practice, cardiology, dermatology, pediatrics, and preventive care."),
         ("parking", "Free parking available in the lot behind the building."),
         ("general", "Welcome to Greenfield Medical Center. We're here to help with your healthcare needs."),
+        ("visit_instructions", "Please bring a valid ID and your insurance card. Arrive 15 minutes before your appointment. If your doctor requested fasting or other prep, follow those instructions — otherwise you can eat and drink as usual."),
     ]
     for key, val in clinic_data:
         await db.set_clinic_info(key, val)
