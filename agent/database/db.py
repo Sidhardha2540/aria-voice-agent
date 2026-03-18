@@ -54,6 +54,13 @@ class SharedDbAdapter:
     ) -> list[Appointment]:
         return await self._appointments.get_by_doctor_and_date(doctor_id, date)
 
+    async def get_appointments_by_patient_phone(
+        self, patient_phone: str, future_only: bool = True
+    ) -> list[Appointment]:
+        return await self._appointments.get_by_patient_phone(
+            patient_phone, future_only=future_only
+        )
+
     async def get_appointment_by_id(self, appointment_id: str) -> Appointment | None:
         return await self._appointments.get_by_id(appointment_id)
 

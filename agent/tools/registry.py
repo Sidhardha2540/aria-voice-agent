@@ -61,10 +61,67 @@ def get_tool_schemas() -> ToolsSchema:
             properties={
                 "topic": {
                     "type": "string",
-                    "description": "One of: hours, address, insurance, services, parking, general",
+                    "description": "One of: hours, address, insurance, services, parking, visit_instructions, general",
                 },
             },
             required=["topic"],
+        ),
+        FunctionSchema(
+            name="list_doctors",
+            description="List doctors at the clinic, optionally by specialization (e.g. dermatology, cardiology). Use when caller asks who we have or which doctors are available.",
+            properties={
+                "specialization_filter": {
+                    "type": "string",
+                    "description": "Optional: filter by specialization (e.g. 'dermatology'). Leave empty for all doctors.",
+                },
+            },
+            required=[],
+        ),
+        FunctionSchema(
+            name="get_my_appointments",
+            description="Look up the caller's upcoming appointments by their phone number. Use when they ask what appointments they have or when their next visit is.",
+            properties={
+                "patient_phone": {"type": "string", "description": "Caller's phone number"},
+                "future_only": {
+                    "type": "boolean",
+                    "description": "If true, only return future appointments. Default true.",
+                },
+            },
+            required=["patient_phone"],
+        ),
+        FunctionSchema(
+            name="request_medical_records",
+            description="Submit a request for the caller's medical records (copy to pick up or send). Staff will fulfill within 5 business days. Use when caller wants their records sent or a copy.",
+            properties={
+                "caller_phone": {"type": "string", "description": "Caller's phone number"},
+                "caller_name": {"type": "string", "description": "Caller's name if known"},
+                "destination": {
+                    "type": "string",
+                    "description": "One of: email, pickup, or brief description of where to send",
+                },
+                "notes": {"type": "string", "description": "Optional notes (e.g. email address)"},
+            },
+            required=["caller_phone"],
+        ),
+        FunctionSchema(
+            name="check_visit_instructions",
+            description="Get pre-visit instructions: what to bring, whether to fast, arrive early, etc. Optional filter by doctor or specialty for specific instructions.",
+            properties={
+                "doctor_name_or_specialization": {
+                    "type": "string",
+                    "description": "Optional: doctor name or specialty (e.g. dermatology) for specialty-specific instructions",
+                },
+            },
+            required=[],
+        ),
+        FunctionSchema(
+            name="send_confirmation_reminder",
+            description="Request that a confirmation or reminder be sent for an existing appointment (SMS/email ~24h before). Use when caller says they didn't get a reminder or wants one sent.",
+            properties={
+                "appointment_id": {"type": "string", "description": "Appointment ID (e.g. APT-XXXXXX)"},
+                "patient_phone": {"type": "string", "description": "Optional: caller's phone if different from booking"},
+            },
+            required=["appointment_id"],
         ),
         FunctionSchema(
             name="lookup_caller",

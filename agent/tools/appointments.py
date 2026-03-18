@@ -282,3 +282,28 @@ async def cancel_appointment(appointment_id: str, reason: str = "") -> str:
     if success:
         return f"Appointment {appointment_id} has been cancelled. If you need to rebook, just let me know."
     return f"I had trouble cancelling that. Let me transfer you to our front desk."
+
+
+async def get_my_appointments(patient_phone: str, future_only: bool = True) -> str:
+    """Returns a SPEAKABLE summary of the caller's appointments (by phone)."""
+    db = await get_shared_db()
+    if not (patient_phone or "").strip():
+        return "I'll need your phone number to look up your appointments."
+
+    appointments = await db.get_appointments_by_patient_phone(
+        patient_phone.strip(), future_only=future_only
+    )
+    if not appointments:
+        return "You don't have any upcoming appointments on file. Would you like to book one?"
+
+    parts = []
+    for apt in appointments:
+        doctor = await db.get_doctor_by_id(apt.doctor_id)
+        doc_name = doctor.name if doctor else "Your doctor"
+        d = datetime.strptime(apt.appointment_date, "%Y-%m-%d").date()
+        parts.append(
+            f"{doc_name} on {_format_date(d)} at {_format_time(apt.start_time)} — {apt.id}"
+        )
+    if len(parts) == 1:
+        return f"You have one appointment: {parts[0]}."
+    return "You have " + ", ".join(parts[:-1]) + ", and " + parts[-1] + "."

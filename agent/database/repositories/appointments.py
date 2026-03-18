@@ -27,6 +27,27 @@ class AppointmentRepository:
         )
         return [self._row_to_appointment(r) for r in rows]
 
+    async def get_by_patient_phone(
+        self, patient_phone: str, future_only: bool = True
+    ) -> list[Appointment]:
+        """List appointments for a patient by phone. Optionally only future (date >= today)."""
+        if future_only:
+            rows = await self._db.execute(
+                """SELECT * FROM appointments
+                   WHERE patient_phone = ? AND status = 'booked'
+                   AND appointment_date >= date('now')
+                   ORDER BY appointment_date, start_time""",
+                patient_phone,
+            )
+        else:
+            rows = await self._db.execute(
+                """SELECT * FROM appointments
+                   WHERE patient_phone = ? AND status = 'booked'
+                   ORDER BY appointment_date, start_time""",
+                patient_phone,
+            )
+        return [self._row_to_appointment(r) for r in rows]
+
     async def create(self, appointment: Appointment) -> None:
         await self._db.execute_write(
             """INSERT INTO appointments

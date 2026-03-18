@@ -8,8 +8,11 @@ A **voice-first AI receptionist** for medical clinics. Callers talk naturally in
 
 | Feature | Description |
 |--------|-------------|
-| **Appointments** | Book, reschedule, and cancel with a doctor by name or specialty (e.g. dermatology, cardiology). |
-| **Clinic FAQ** | Hours, address, insurance, parking, services — answered from context, no tool call when possible. |
+| **Appointments** | Book, reschedule, cancel; check availability; list your upcoming appointments by phone. |
+| **Doctors** | List doctors (optionally by specialty) — "Who do you have?" |
+| **Clinic FAQ** | Hours, address, insurance, parking, services, pre-visit instructions. |
+| **Medical records** | Request a copy (pickup or send); staff fulfill within ~5 business days. |
+| **Reminders** | Request SMS/email reminder for an existing appointment (~24h before). |
 | **Returning callers** | Recognizes callers by phone and personalizes (e.g. “Welcome back, Jane”). |
 | **Escalation** | Transfers to human staff with a ticket (medical advice, billing, complaints, or “I want a person”). |
 | **End call** | When the caller says goodbye or sounds satisfied, Aria says a short sign-off and ends the call. |
@@ -154,6 +157,7 @@ Key environment variables (see `.env.example` for the full list):
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | End-to-end architecture, pipeline stages, latency vs quality. |
 | [DIAGNOSTICS.md](DIAGNOSTICS.md) | Where the pipeline can break, latency targets, learning-from-feedback. |
+| [docs/TOOLS.md](docs/TOOLS.md) | **All implemented tools** and **ideas for new tools** (list_doctors, get_my_appointments, refill, etc.). |
 | [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md) | Tools and example test flows. |
 | [docs/MCP_AND_MEMORY.md](docs/MCP_AND_MEMORY.md) | MCP for tools and Mem0 for memory (assessment). |
 
