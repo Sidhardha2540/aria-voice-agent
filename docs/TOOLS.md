@@ -103,3 +103,7 @@ Ideas for additional tools that fit a healthcare receptionist, ordered by effort
 | **Requests/tickets** | request_medical_records, send_confirmation_reminder | request_prescription_refill |
 | **Billing** | — | get_balance, pay_bill (medium–high effort) |
 | **Safety** | — | symptom_checker_triage (urgent / 911) |
+
+---
+
+*See also: [README](../README.md) for setup and [TEST_CHECKLIST](TEST_CHECKLIST.md) for how to exercise each tool.*
