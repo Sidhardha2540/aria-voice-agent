@@ -355,4 +355,6 @@ Then open **http://localhost:7860/client** and click **Call**.
 
 ---
 
+**Related:** [docs/TOOLS.md](docs/TOOLS.md) lists every agent tool and backend.
+
 *Last updated to reflect latency optimizations: <300ms target, 8B-instant, DB caching, ContextTrimmer, token TTS.*
