@@ -80,3 +80,7 @@ So “it worked then broke” is often: **first turn works (no tool), second tur
 - [ ] No `NameError` or traceback in logs (e.g. from `GROQ_MODEL` or missing import).
 - [ ] After “Let me check that for you,” check logs for tool timeout or tool error, then for a second LLM call.
 - [ ] Inspect `[LATENCY] Breakdown` and `data/metrics.jsonl` to see which stage is slow or missing.
+
+---
+
+**See also:** [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline picture; [docs/TOOLS.md](docs/TOOLS.md) for tool behavior.

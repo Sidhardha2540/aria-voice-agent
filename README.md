@@ -160,6 +160,7 @@ Key environment variables (see `.env.example` for the full list):
 | [docs/TOOLS.md](docs/TOOLS.md) | **All implemented tools** and **ideas for new tools** (list_doctors, get_my_appointments, refill, etc.). |
 | [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md) | Tools and example test flows. |
 | [docs/MCP_AND_MEMORY.md](docs/MCP_AND_MEMORY.md) | MCP for tools and Mem0 for memory (assessment). |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branch naming, commits, and pull requests. |
 
 ---
 
