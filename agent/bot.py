@@ -140,34 +140,12 @@ async def bot(runner_args: RunnerArguments):
     await run_bot(transport)
 
 
-def _register_exit_cleanup():
-    """Close DB on process exit so Ctrl+C stops the process completely."""
-    import atexit
-    import asyncio
-
-    def _shutdown_db():
-        try:
-            from agent.database.manager import db_manager
-            if db_manager._conn is None and db_manager._pool is None:
-                return
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(asyncio.wait_for(db_manager.shutdown(), timeout=2.0))
-                logger.info("Database closed on exit.")
-            except asyncio.TimeoutError:
-                logger.warning("Database shutdown timed out; exiting anyway.")
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.debug("Exit cleanup: {}", e)
-
-    atexit.register(_shutdown_db)
-
-
 if __name__ == "__main__":
-    _register_exit_cleanup()
     import sys
+
     from agent.config import settings
+    from agent.runner_preflight import apply_runner_argv_from_settings, exit_if_tcp_port_already_listening
+
     logger.info(
         "[CONFIG] Latency: utterance_end_ms={} endpointing={} model={} tts_low_latency={}",
         settings.deepgram_utterance_end_ms,
@@ -175,9 +153,21 @@ if __name__ == "__main__":
         settings.openai_model,
         settings.tts_low_latency,
     )
-    # Use PORT from .env so a different port can be set when 7860 is in use
-    if "--port" not in sys.argv and settings.port != 7860:
-        sys.argv.extend(["--port", str(settings.port)])
-        logger.info("[CONFIG] Using port %s (set PORT in .env if 7860 is in use)", settings.port)
+    apply_runner_argv_from_settings(sys.argv, settings)
+    # Resolve effective port from argv for the check
+    port = settings.port
+    if "--port" in sys.argv:
+        i = sys.argv.index("--port")
+        if i + 1 < len(sys.argv):
+            try:
+                port = int(sys.argv[i + 1])
+            except ValueError:
+                pass
+    host = settings.host
+    if "--host" in sys.argv:
+        i = sys.argv.index("--host")
+        if i + 1 < len(sys.argv):
+            host = sys.argv[i + 1]
+    exit_if_tcp_port_already_listening(host, port)
     from pipecat.runner.run import main
     main()

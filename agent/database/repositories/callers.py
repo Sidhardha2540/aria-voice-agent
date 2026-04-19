@@ -2,9 +2,9 @@
 Caller repository — pure data access.
 """
 import json
-from datetime import datetime
 
 from agent.database.manager import DatabaseManager
+from agent.utils.timeutil import utc_now_iso_z
 from agent.database.models import Caller
 
 
@@ -24,7 +24,7 @@ class CallerRepository:
         name: str = "",
         preferences: dict | None = None,
     ) -> None:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = utc_now_iso_z()
         prefs = json.dumps(preferences or {})
         await self._db.execute_write(
             """INSERT INTO callers (phone_number, name, last_call_at, preferences, call_count)

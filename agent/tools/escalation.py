@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
+from agent.utils.redact import redact_for_log, redact_name, redact_phone
+
 
 async def escalate_to_human(
     reason: str,
@@ -32,7 +34,14 @@ async def escalate_to_human(
         "aria_tried": (aria_tried or "").strip() or None,
     }
     summary_json = json.dumps(summary, indent=2)
-    logger.info("[ESCALATION] ticket={} reason={} summary={}", ticket_id, reason, summary_json)
+    logger.info(
+        "[ESCALATION] ticket={} reason={} name={} phone={} summary={}",
+        ticket_id,
+        redact_for_log(reason),
+        redact_name(caller_name or ""),
+        redact_phone(caller_phone or ""),
+        redact_for_log(summary_json, max_len=400),
+    )
 
     return (
         f"I've created a support ticket for you. Your ticket number is {ticket_id}. "

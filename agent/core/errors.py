@@ -32,6 +32,11 @@ TOOL_ERROR_RESPONSES = {
     "save_caller": "I had a small issue saving that. I can still help you with your appointment.",
     "escalate_to_human": "I'm connecting you with our staff right now. Please hold for just a moment.",
     "end_call": "Have a great day! You can hang up when you're ready.",
+    "list_doctors": "I'm having trouble pulling up our provider list. Let me connect you with the front desk.",
+    "get_my_appointments": "I couldn't look up your appointments just now. Want me to try again or connect you with staff?",
+    "request_medical_records": "I had trouble submitting that records request. Our front desk can finish it for you.",
+    "check_visit_instructions": "I'm having a little trouble with those instructions. The front desk can confirm when you arrive.",
+    "send_confirmation_reminder": "I couldn't queue that reminder. Please call us or ask the front desk to resend your confirmation.",
     "default": "I ran into a small issue. Let me connect you with our front desk to make sure you're taken care of.",
 }
 

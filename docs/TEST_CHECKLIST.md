@@ -5,7 +5,7 @@
 | Tool | What it does | How to test |
 |------|----------------|-------------|
 | **check_availability** | Get open slots for a doctor by name or specialty | "I need an appointment with a dermatologist" or "Dr. Rodriguez" → bot checks and offers 2–3 times. |
-| **book_appointment** | Book after confirming details (name, phone, date, time) | Complete the booking flow: pick doctor → pick slot → give name → confirm → give phone → confirm → bot books and reads back ID. |
+| **book_appointment** | Book after confirming details (uses tool params `appointment_date`, `start_time`) | Complete the booking flow: pick doctor → pick slot → give name → confirm → give phone → confirm → bot books and reads back ID. |
 | **reschedule_appointment** | Move existing appointment to new date/time | "I need to reschedule my appointment" → give APT-XXXXXX → new date and time. |
 | **cancel_appointment** | Cancel by appointment ID | "I want to cancel my appointment" → give APT-XXXXXX. |
 | **get_clinic_info** | Hours, address, insurance, parking, services | "What are your hours?" / "Do you take insurance?" / "Where are you located?" / "Parking?" |

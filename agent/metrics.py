@@ -181,7 +181,7 @@ async def _write_metrics_async(metrics_dict: dict, path: str) -> None:
     try:
         p = Path(path)
         line = json.dumps(metrics_dict) + "\n"
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_write_jsonl, p, line)
     except Exception as e:
         logger.warning("Failed to write metrics to %s: %s", path, e)
@@ -191,4 +191,18 @@ def log_and_persist_metrics(metrics: "CallMetrics", jsonl_path: str = "data/metr
     """Log metrics as [CALL_METRICS] and schedule async write to file."""
     d = metrics.finalize()
     logger.info("[CALL_METRICS] {}", json.dumps(d))
-    asyncio.create_task(_write_metrics_async(d, jsonl_path))
+
+    async def _write_with_log():
+        try:
+            await _write_metrics_async(d, jsonl_path)
+        except Exception as e:
+            logger.error("Metrics async write failed: {}", e)
+
+    t = asyncio.create_task(_write_with_log())
+
+    def _log_task_err(task: asyncio.Task) -> None:
+        exc = task.exception()
+        if exc:
+            logger.error("Background metrics task failed: {}", exc)
+
+    t.add_done_callback(_log_task_err)

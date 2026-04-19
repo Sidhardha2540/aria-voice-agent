@@ -5,7 +5,8 @@ services:
       - "${PORT:-7860}:7860"
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql://aria:aria_pass@postgres:5432/aria_db
+      - HOST=0.0.0.0
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-aria}:${POSTGRES_PASSWORD:-aria_pass}@postgres:5432/${POSTGRES_DB:-aria_db}
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
@@ -22,9 +23,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: aria
-      POSTGRES_PASSWORD: aria_pass
-      POSTGRES_DB: aria_db
+      POSTGRES_USER: ${POSTGRES_USER:-aria}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aria_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-aria_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:

@@ -1,7 +1,9 @@
 """Medical records request — log request for staff to fulfill."""
 import json
-from datetime import datetime
 from pathlib import Path
+
+from agent.utils.redact import redact_name, redact_phone
+from agent.utils.timeutil import utc_now_iso_z
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _REQUESTS_FILE = _DATA_DIR / "medical_record_requests.jsonl"
@@ -19,9 +21,9 @@ async def request_medical_records(
     """
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     record = {
-        "requested_at": datetime.utcnow().isoformat() + "Z",
-        "caller_phone": (caller_phone or "").strip(),
-        "caller_name": (caller_name or "").strip(),
+        "requested_at": utc_now_iso_z(),
+        "caller_phone": redact_phone((caller_phone or "").strip()),
+        "caller_name": redact_name((caller_name or "").strip()),
         "destination": (destination or "pickup").strip().lower(),
         "notes": (notes or "").strip()[:500],
     }

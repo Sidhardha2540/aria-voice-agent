@@ -3,9 +3,8 @@ Database access for Aria — single connection via DatabaseManager + repositorie
 This module provides backward-compatible get_shared_db() returning an adapter
 that delegates to db_manager and repositories. All callers share one connection.
 """
-from datetime import datetime
-
 from agent.database.manager import db_manager
+from agent.utils.timeutil import utc_now_iso_z
 from agent.database.models import Doctor, Appointment, Caller, ClinicInfo
 from agent.database.repositories import (
     DoctorRepository,
@@ -61,6 +60,11 @@ class SharedDbAdapter:
             patient_phone, future_only=future_only
         )
 
+    async def get_booked_slots_batch(
+        self, doctor_ids: list[int], dates: list[str]
+    ) -> dict[tuple[int, str], set[str]]:
+        return await self._appointments.get_booked_slots_batch(doctor_ids, dates)
+
     async def get_appointment_by_id(self, appointment_id: str) -> Appointment | None:
         return await self._appointments.get_by_id(appointment_id)
 
@@ -77,7 +81,7 @@ class SharedDbAdapter:
     ) -> None:
         from agent.database.models import AppointmentStatus
 
-        created_at = datetime.utcnow().isoformat() + "Z"
+        created_at = utc_now_iso_z()
         apt = Appointment(
             id=appointment_id,
             doctor_id=doctor_id,

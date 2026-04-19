@@ -124,7 +124,7 @@ async def classify_by_llm(
         return "complex"
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         intent = await asyncio.wait_for(
             loop.run_in_executor(
                 None,

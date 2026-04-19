@@ -65,31 +65,11 @@ def apply_emotion_transform(
     base_speed: float = 1.05,
 ) -> tuple[str, str, float]:
     """
-    Transform text with emotion/speed tags when heuristic detects a change.
-    Uses mutable lists for last_emotion, last_speed to maintain state across calls.
-    Returns (transformed_text, new_emotion, new_speed).
+    Infer emotion/speed from text for logging and future generation_config tuning.
+    Does NOT inject SSML tags — Cartesia's streaming API does not parse <emotion/> in text;
+    tags would be spoken or stripped. Default emotion/speed stay in pipeline GenerationConfig.
     """
     emotion, speed = infer_emotion_and_speed(text)
-    new_emotion = last_emotion[0]
-    new_speed = last_speed[0]
-
-    out = text
-    if emotion != last_emotion[0] and text.strip():
-        tag = make_emotion_tag(emotion)
-        out = f"{tag} {text}"
-        last_emotion[0] = emotion
-        new_emotion = emotion
-
-    # Cartesia speed tag when we want slower (empathetic) or faster (confirmations)
-    if abs(speed - base_speed) > 0.03 and speed != last_speed[0]:
-        # Only add speed tag for notable changes; Cartesia uses <speed ratio="X"/>
-        speed_tag = f'<speed ratio="{speed:.2f}" />'
-        if not out.startswith("<"):
-            out = f"{speed_tag} {out}"
-        elif " />" in out:
-            # Already have emotion tag; prepend speed before emotion
-            out = f"{speed_tag} {out}"
-        last_speed[0] = speed
-        new_speed = speed
-
-    return out, new_emotion, new_speed
+    last_emotion[0] = emotion
+    last_speed[0] = speed
+    return text, emotion, speed

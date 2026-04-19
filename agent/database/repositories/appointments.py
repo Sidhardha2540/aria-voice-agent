@@ -27,6 +27,24 @@ class AppointmentRepository:
         )
         return [self._row_to_appointment(r) for r in rows]
 
+    async def get_booked_slots_batch(
+        self, doctor_ids: list[int], dates: list[str]
+    ) -> dict[tuple[int, str], set[str]]:
+        """One query: (doctor_id, appointment_date) -> set of start_time for booked rows."""
+        if not doctor_ids or not dates:
+            return {}
+        q_marks = ",".join("?" * len(doctor_ids))
+        d_marks = ",".join("?" * len(dates))
+        sql = f"""SELECT doctor_id, appointment_date, start_time FROM appointments
+                  WHERE status = 'booked' AND doctor_id IN ({q_marks})
+                  AND appointment_date IN ({d_marks})"""
+        rows = await self._db.execute(sql, *doctor_ids, *dates)
+        out: dict[tuple[int, str], set[str]] = {}
+        for r in rows:
+            key = (int(r["doctor_id"]), r["appointment_date"])
+            out.setdefault(key, set()).add(r["start_time"])
+        return out
+
     async def get_by_patient_phone(
         self, patient_phone: str, future_only: bool = True
     ) -> list[Appointment]:

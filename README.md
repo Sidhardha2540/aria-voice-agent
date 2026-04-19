@@ -2,6 +2,12 @@
 
 A **voice-first AI receptionist** for medical clinics. Callers talk naturally in their browser; Aria books appointments, answers FAQs, recognizes returning callers, and escalates to staff when needed. Built for **low latency** and **conversational feel** using real-time streaming (STT → LLM → TTS) over WebRTC.
 
+## Status
+
+Aria is a **working prototype**, not a production system. It demonstrates real-time voice (STT → LLM → TTS) with latency instrumentation, tool-calling for booking and FAQs, and a learn-from-feedback loop between calls.
+
+**Not production-ready:** no HIPAA-compliant posture, no caller authentication, single-process deployment, SQLite at rest without encryption, and PII in logs is only partially redacted. See [docs/ROADMAP.md](docs/ROADMAP.md) for what a hardened deployment would add.
+
 ---
 
 ## Features
@@ -78,7 +84,9 @@ This creates doctors, sample availability, and clinic info in `data/aria.db`.
 uv run python -m agent.bot -t webrtc
 ```
 
-Then open **http://localhost:7860/client** in your browser and click **Call** to start a voice session.
+Then open **`http://127.0.0.1:7860/client`** in your browser (use `127.0.0.1`, not `localhost`, if the Call button fails to connect — common on Windows). Click **Call** to start a voice session.
+
+If the page does not load, confirm the server log shows **`Uvicorn running on http://...`** (not an `10048` / “address already in use” error). If you see **`[ARIA] Port ... is already in use`**, stop the old bot (`netstat -ano | findstr :7860` on Windows) or set **`PORT=7861`** in `.env`. See [DIAGNOSTICS.md](DIAGNOSTICS.md) § WebRTC connection.
 
 ---
 

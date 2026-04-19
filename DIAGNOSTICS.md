@@ -12,6 +12,19 @@ Groq is not used. If you still have `GROQ_API_KEY` or `GROQ_MODEL` in `.env`, th
 
 ---
 
+## WebRTC connection (“Call” does not connect)
+
+The Pipecat dev server uses **uvicorn** + **SmallWebRTC**. Typical failures:
+
+1. **Windows + `localhost`:** The browser may resolve `localhost` to **IPv6** (`::1`) while the server is only listening on **IPv4**. **Fix:** open **`http://127.0.0.1:7860/client`** (not `localhost`). The app defaults **`HOST=127.0.0.1`** in `agent/config.py` and passes `--host` into the Pipecat runner from `agent/bot.py` / `agent/main.py`.
+2. **Wrong URL:** Use **`/client`** — e.g. `http://127.0.0.1:7860/client`. Root `/` redirects to `/client/`.
+3. **Port / firewall:** Another process may be using `7860` (change `PORT` in `.env`). Corporate VPN or firewall can block **UDP** used by WebRTC — try disconnecting VPN or allow Python through Windows Firewall.
+4. **Server not running:** You should see `Uvicorn running on http://...` in the terminal. If startup errors mention missing packages, reinstall: `uv sync` (needs `pipecat-ai[webrtc,runner]`).
+5. **Docker / LAN:** Set **`HOST=0.0.0.0`** in `.env` or compose so the server accepts non-loopback connections; then open `http://<your-LAN-IP>:7860/client` from another device.
+6. **Port already in use (Windows `10048`, or “connects but Call fails”):** A **stale** `python -m agent.bot` may still hold `7860`. Pipecat can print “Bot ready!” even when uvicorn **failed to bind**; your browser then talks to the **wrong** process. **Fix:** stop old Python processes, or set `PORT=7861` in `.env`. The app now **exits early** if the TCP port is already taken (after argv defaults). Check: `netstat -ano | findstr :7860` then `taskkill /PID <pid> /F`.
+
+---
+
 ## Pipeline flow (where it can break)
 
 ```

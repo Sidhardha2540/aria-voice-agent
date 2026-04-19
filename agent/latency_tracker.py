@@ -26,8 +26,9 @@ import statistics
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
+
+from agent.utils.timeutil import utc_now_iso_z
 from typing import Dict, List
 
 from loguru import logger
@@ -234,7 +235,7 @@ class LatencyTracker:
 
         turn = TurnLatency(
             turn_id=str(uuid.uuid4()),
-            timestamp_iso=datetime.utcnow().isoformat(),
+            timestamp_iso=utc_now_iso_z(),
             stages=stages,
             aggregate=aggregate,
             deltas_ms=deltas,
@@ -316,7 +317,7 @@ class LatencyTracker:
                     {
                         "type": "session_summary",
                         "session_id": self.session_id,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": utc_now_iso_z(),
                         "summary": summary,
                     }
                 )

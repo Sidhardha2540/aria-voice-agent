@@ -66,6 +66,10 @@ class DatabaseManager:
             sql = migration_path.read_text()
             await self._conn.executescript(sql)
             await self._conn.commit()
+            patch_002 = Path(__file__).resolve().parent / "migrations" / "002_appointment_slot_unique.sql"
+            if patch_002.exists():
+                await self._conn.executescript(patch_002.read_text())
+                await self._conn.commit()
         else:
             # Fallback inline schema
             await self._conn.executescript("""
@@ -146,6 +150,13 @@ class DatabaseManager:
                 stmt = stmt.strip()
                 if stmt:
                     await conn.execute(stmt)
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_booked_slot
+                ON appointments (doctor_id, appointment_date, start_time)
+                WHERE (status = 'booked')
+                """
+            )
 
     async def shutdown(self) -> None:
         if self._pool:

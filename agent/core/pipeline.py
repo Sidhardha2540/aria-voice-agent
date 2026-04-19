@@ -23,6 +23,7 @@ from agent.tools.handlers import create_tool_handlers
 from agent.tools.registry import get_tool_schemas
 from agent.context_manager import ContextTrimmer
 from agent.barge_in_logger import BargeInLogger
+from agent.processors.barge_in_ack import BargeInAckProcessor
 from agent.processors.function_call_filter import FunctionCallFilter
 from agent.emotion_mapper import EMOTION_CONTENT, apply_emotion_transform
 from agent.intent_router import IntentRouter
@@ -127,6 +128,7 @@ def create_pipeline(transport, metrics_ref: dict):
         ),
     )
 
+    # Per-pipeline instance (one WebRTC session = one pipeline) — not multi-tenant.
     _last_emotion: list[str] = [EMOTION_CONTENT]
     _last_speed: list[float] = [1.05]
 
@@ -159,6 +161,7 @@ def create_pipeline(transport, metrics_ref: dict):
 
     context_trimmer = ContextTrimmer(context)
     barge_in_logger = BargeInLogger(on_barge_in=_on_barge_in)
+    barge_in_ack = BargeInAckProcessor(metrics_ref=metrics_ref)
 
     pipeline_stages = [
         transport.input(),
@@ -178,7 +181,8 @@ def create_pipeline(transport, metrics_ref: dict):
         )
         pipeline_stages.append(intent_router)
     # Filter strips < function = ... >{...}</ function > from LLM output so TTS doesn't speak it
-    pipeline_stages.extend([llm, FunctionCallFilter(), tts, transport.output(), assistant_aggregator])
+    # LLM → ack prefix after barge-in → strip function markup → TTS (plain text; no SSML in stream)
+    pipeline_stages.extend([llm, barge_in_ack, FunctionCallFilter(), tts, transport.output(), assistant_aggregator])
 
     pipeline = Pipeline(pipeline_stages)
     return pipeline, context

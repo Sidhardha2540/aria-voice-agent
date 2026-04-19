@@ -134,8 +134,10 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments (never commit secrets; .env.example is the template)
 .env
+.env.*
+!.env.example
 .envrc
 
 # Local database

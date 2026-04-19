@@ -49,9 +49,10 @@ class Settings(BaseSettings):
     # Transport
     transport_mode: str = "webrtc"
 
-    # Server
+    # Server — bind address for Pipecat dev runner (uvicorn). Use 127.0.0.1 for reliable WebRTC on
+    # Windows (localhost can resolve to ::1 while stack listens on IPv4). Use 0.0.0.0 in Docker/LAN.
     port: int = Field(default=7860, ge=1, le=65535)
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
 
     # Observability
     log_level: str = "INFO"

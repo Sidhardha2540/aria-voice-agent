@@ -148,7 +148,7 @@ The Pipecat pipeline is a linear chain of processors. Frames flow **downstream**
 ### 5.6 Prompts
 
 - **File:** `agent/prompts.py`
-- **SYSTEM_PROMPT:** Persona, rules, flows, accuracy constraints.
+- **System prompt:** Built by `get_system_prompt()` at pipeline creation (persona, clinic facts, tools, learn-from-feedback).
 - **GREETING_PROMPT:** Initial greeting when call connects.
 - **Key rules:** Only use tool data; never invent; say "I don't know" when unsure; offer transfer for out-of-scope requests.
 

@@ -2,6 +2,7 @@
 Appointment tools — optimized for voice latency.
 Tool results are near-speakable sentences so the LLM can relay them naturally.
 """
+import sqlite3
 import uuid
 from calendar import monthrange
 from datetime import date, datetime, timedelta
@@ -124,14 +125,17 @@ async def check_availability(doctor_name_or_specialization: str, preferred_date:
     if not dates_to_check:
         return "I couldn't figure out which dates to check. Could you give me a specific date?"
 
+    doctor_ids = [d.id for d in doctors]
+    date_strings = [d.isoformat() for d in dates_to_check]
+    booked_batch = await db.get_booked_slots_batch(doctor_ids, date_strings)
+
     for doc in doctors:
         all_slots = []
         for d in dates_to_check:
             if d.strftime("%A") not in doc.available_days:
                 continue
 
-            existing = await db.get_appointments_by_doctor_and_date(doc.id, d.isoformat())
-            booked_starts = {a.start_time for a in existing}
+            booked_starts = booked_batch.get((doc.id, d.isoformat()), set())
 
             t = datetime.combine(d, datetime.min.time().replace(hour=9))
             end_dt = datetime.combine(d, datetime.min.time().replace(hour=17))
@@ -164,7 +168,14 @@ async def check_availability(doctor_name_or_specialization: str, preferred_date:
     return f"{doc_name} is fully booked for the dates I checked. Want me to check a different week or another doctor?"
 
 
-async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str, date: str, time: str, notes: str = "") -> str:
+async def book_appointment(
+    doctor_id: int,
+    patient_name: str,
+    patient_phone: str,
+    appointment_date: str,
+    start_time: str,
+    notes: str = "",
+) -> str:
     """Returns a SPEAKABLE confirmation the LLM can relay directly."""
     db = await get_shared_db()
 
@@ -181,8 +192,9 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
     if not patient_phone.strip():
         return "I'll need a phone number for the appointment."
 
-    # Ensure date uses current year if a past year was sent (e.g. 2024)
-    date_str = date.strip()
+    # Ensure date uses current year if a past year was sent (e.g. 2024).
+    # Parameter must NOT be named `date` — it shadows datetime.date and breaks date.today().
+    date_str = appointment_date.strip()
     try:
         parsed = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
         today = date.today()
@@ -190,41 +202,43 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
             try:
                 parsed = parsed.replace(year=today.year)
             except ValueError:
-                # e.g. Feb 29 in non-leap year
                 max_day = monthrange(today.year, parsed.month)[1]
                 parsed = parsed.replace(year=today.year, day=min(parsed.day, max_day))
             date_str = parsed.isoformat()
     except (ValueError, IndexError):
         pass
 
-    time = time.strip()
-    if len(time) == 5:
-        time += ":00"
+    time_str = start_time.strip()
+    if len(time_str) == 5:
+        time_str += ":00"
 
     try:
-        start_dt = datetime.strptime(time, "%H:%M:%S")
+        start_dt = datetime.strptime(time_str, "%H:%M:%S")
     except ValueError:
-        return f"I couldn't understand the time {time}. Could you say it like 10:30?"
+        return f"I couldn't understand the time {start_time}. Could you say it like 10:30?"
 
     end_dt = start_dt + timedelta(minutes=30)
     end_time = _time_str(end_dt.hour, end_dt.minute)
 
     existing = await db.get_appointments_by_doctor_and_date(doctor_id, date_str)
     for a in existing:
-        if a.start_time == time:
+        if a.start_time == time_str:
             return "That slot was just taken. Let me check what else is available."
 
     apt_id = generate_appointment_id()
-    await db.create_appointment(
-        appointment_id=apt_id,
-        doctor_id=doctor_id,
-        patient_name=patient_name,
-        patient_phone=patient_phone,
-        date=date_str,
-        start_time=time,
-        end_time=end_time,
-        notes=notes,
-    )
+    try:
+        await db.create_appointment(
+            appointment_id=apt_id,
+            doctor_id=doctor_id,
+            patient_name=patient_name,
+            patient_phone=patient_phone,
+            date=date_str,
+            start_time=time_str,
+            end_time=end_time,
+            notes=notes,
+        )
+    except sqlite3.IntegrityError:
+        return "That slot was just taken. Let me check what else is available."
     await db.upsert_caller(patient_phone, patient_name)
     await db.update_caller_preferences(patient_phone, "last_doctor", doctor.name)
 
@@ -232,7 +246,7 @@ async def book_appointment(doctor_id: int, patient_name: str, patient_phone: str
 
     return (
         f"All set! {patient_name} is booked with {doctor.name} "
-        f"on {_format_date(d)} at {_format_time(time)}. "
+        f"on {_format_date(d)} at {_format_time(time_str)}. "
         f"The appointment ID is {apt_id}."
     )
 

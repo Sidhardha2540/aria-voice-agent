@@ -50,8 +50,10 @@ def create_tool_handlers(
                 doctor_id=safe_int(args.get("doctor_id"), 0),
                 patient_name=safe_str(args.get("patient_name"), ""),
                 patient_phone=safe_str(args.get("patient_phone"), ""),
-                date=safe_str(args.get("date"), ""),
-                time=safe_str(args.get("time"), ""),
+                appointment_date=safe_str(
+                    args.get("appointment_date") or args.get("date"), ""
+                ),
+                start_time=safe_str(args.get("start_time") or args.get("time"), ""),
                 notes=safe_str(args.get("notes"), ""),
             )
             await p.result_callback(result)
