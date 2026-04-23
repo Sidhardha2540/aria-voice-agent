@@ -1,4 +1,5 @@
 """Regression tests from REVIEW.md (booking bug, redaction, emotion plain text)."""
+import asyncio
 import inspect
 
 import pytest
@@ -32,8 +33,7 @@ def test_redact_name_initials():
     assert redact_name("Jane Doe") == "JD."
 
 
-@pytest.mark.asyncio
-async def test_book_appointment_happy_path_uses_date_today(monkeypatch):
+def test_book_appointment_happy_path_uses_date_today(monkeypatch):
     """Ensure date.today() is the real class inside book_appointment (no shadowing)."""
     from datetime import date as date_cls
     from unittest.mock import AsyncMock, MagicMock
@@ -55,15 +55,18 @@ async def test_book_appointment_happy_path_uses_date_today(monkeypatch):
 
     monkeypatch.setattr(appointments, "get_shared_db", fake_get_db)
 
-    y, m, d = date_cls.today().year, 6, 15
-    appt_date = f"{y}-06-15"
-    result = await appointments.book_appointment(
-        doctor_id=1,
-        patient_name="Test Patient",
-        patient_phone="555-0000",
-        appointment_date=appt_date,
-        start_time="10:00",
-        notes="",
-    )
+    async def _run():
+        y = date_cls.today().year
+        appt_date = f"{y}-06-15"
+        return await appointments.book_appointment(
+            doctor_id=1,
+            patient_name="Test Patient",
+            patient_phone="555-0000",
+            appointment_date=appt_date,
+            start_time="10:00",
+            notes="",
+        )
+
+    result = asyncio.run(_run())
     assert "booked" in result.lower() or "All set" in result
     assert "APT-" in result

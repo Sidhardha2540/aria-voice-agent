@@ -1,5 +1,5 @@
 """Tests for error boundaries: safe_int, safe_str, safe_tool_call."""
-import pytest
+import asyncio
 
 from agent.core.errors import safe_int, safe_str, safe_tool_call, TOOL_ERROR_RESPONSES
 
@@ -30,33 +30,39 @@ def test_safe_str():
     assert safe_str(42) == "42"
 
 
-@pytest.mark.asyncio
-async def test_safe_tool_call_returns_on_success():
-    async def ok_handler(params):
-        await params.result_callback("OK")
+def test_safe_tool_call_returns_on_success():
+    async def _run():
+        async def ok_handler(params):
+            await params.result_callback("OK")
 
-    class Params:
-        def __init__(self):
-            self.result_callback_called = None
-        async def result_callback(self, msg):
-            self.result_callback_called = msg
+        class Params:
+            def __init__(self):
+                self.result_callback_called = None
 
-    params = Params()
-    await safe_tool_call("check_availability", ok_handler, params, "test-session")
-    assert params.result_callback_called == "OK"
+            async def result_callback(self, msg):
+                self.result_callback_called = msg
+
+        params = Params()
+        await safe_tool_call("check_availability", ok_handler, params, "test-session")
+        assert params.result_callback_called == "OK"
+
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_safe_tool_call_returns_spoken_error_on_failure():
-    async def fail_handler(params):
-        raise ValueError("bad")
+def test_safe_tool_call_returns_spoken_error_on_failure():
+    async def _run():
+        async def fail_handler(params):
+            raise ValueError("bad")
 
-    class Params:
-        def __init__(self):
-            self.result_callback_called = None
-        async def result_callback(self, msg):
-            self.result_callback_called = msg
+        class Params:
+            def __init__(self):
+                self.result_callback_called = None
 
-    params = Params()
-    await safe_tool_call("check_availability", fail_handler, params, "test-session")
-    assert params.result_callback_called == TOOL_ERROR_RESPONSES["check_availability"]
+            async def result_callback(self, msg):
+                self.result_callback_called = msg
+
+        params = Params()
+        await safe_tool_call("check_availability", fail_handler, params, "test-session")
+        assert params.result_callback_called == TOOL_ERROR_RESPONSES["check_availability"]
+
+    asyncio.run(_run())
