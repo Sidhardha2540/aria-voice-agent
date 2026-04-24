@@ -146,6 +146,7 @@ Key environment variables (see `.env.example` for the full list):
 
 - **Tools:** Aria can check availability, book/reschedule/cancel appointments, look up callers, get clinic info, escalate to a human, and end the call when you’re satisfied.
 - **Example flows:** “I need an appointment with a dermatologist” → pick slot → give name and phone → confirm → booked. Or: “What are your hours?” / “Thanks, that’s all” → end call.
+- **Automated tests:** run `./scripts/run_tests.ps1` (or `./scripts/run_tests.ps1 -Quiet` for concise output). The script uses project `.venv` when available and falls back to system `python`.
 - **Full checklist:** See [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md) for tool-by-tool test cases and example phrases.
 
 ---
