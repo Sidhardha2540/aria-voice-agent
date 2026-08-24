@@ -15,6 +15,28 @@ if _env_file.exists():
     dotenv.load_dotenv(_env_file)
 
 
+PLACEHOLDER_SECRET_MARKERS = (
+    "your_",
+    "your-",
+    "replace_me",
+    "changeme",
+    "example",
+    "test_key",
+)
+
+
+def is_configured_secret(value: str | None) -> bool:
+    """Return True only for non-empty values that do not look like examples."""
+
+    if value is None:
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    lowered = candidate.lower()
+    return not any(marker in lowered for marker in PLACEHOLDER_SECRET_MARKERS)
+
+
 class Settings(BaseSettings):
     # Required — app MUST NOT start without these (set in .env)
     deepgram_api_key: str
@@ -95,8 +117,11 @@ class Settings(BaseSettings):
     @field_validator("deepgram_api_key", "openai_api_key", "cartesia_api_key")
     @classmethod
     def required_api_keys_not_empty(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("API key must not be empty. Set in .env or environment.")
+        if not is_configured_secret(v):
+            raise ValueError(
+                "API key must be a real secret, not empty or an example placeholder. "
+                "Set it in .env or the environment."
+            )
         return v.strip()
 
 
