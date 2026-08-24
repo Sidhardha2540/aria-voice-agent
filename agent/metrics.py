@@ -191,6 +191,13 @@ def log_and_persist_metrics(metrics: "CallMetrics", jsonl_path: str = "data/metr
     """Log metrics as [CALL_METRICS] and schedule async write to file."""
     d = metrics.finalize()
     logger.info("[CALL_METRICS] {}", json.dumps(d))
+    line = json.dumps(d) + "\n"
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        _sync_write_jsonl(Path(jsonl_path), line)
+        return
 
     async def _write_with_log():
         try:
@@ -201,6 +208,9 @@ def log_and_persist_metrics(metrics: "CallMetrics", jsonl_path: str = "data/metr
     t = asyncio.create_task(_write_with_log())
 
     def _log_task_err(task: asyncio.Task) -> None:
+        if task.cancelled():
+            logger.warning("Background metrics task was cancelled")
+            return
         exc = task.exception()
         if exc:
             logger.error("Background metrics task failed: {}", exc)
