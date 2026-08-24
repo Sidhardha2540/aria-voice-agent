@@ -4,8 +4,37 @@ Used by Docker HEALTHCHECK, load balancers, and monitoring.
 """
 import time
 
-from agent.config import settings
+from agent.config import is_configured_secret, settings
 from agent.database.manager import db_manager
+
+
+REQUIRED_API_KEYS = {
+    "deepgram": "deepgram_api_key",
+    "openai": "openai_api_key",
+    "cartesia": "cartesia_api_key",
+}
+
+
+def check_required_secret(service: str, value: str | None) -> dict:
+    """Build a health-check entry for a required secret."""
+
+    if is_configured_secret(value):
+        return {"status": "ok"}
+    return {
+        "status": "missing_key",
+        "detail": f"{service.upper()} API key is missing or still set to an example value.",
+    }
+
+
+def overall_status(checks: dict) -> str:
+    """Classify aggregate health from individual check statuses."""
+
+    statuses = [check["status"] for check in checks.values()]
+    if all(status == "ok" for status in statuses):
+        return "healthy"
+    if "error" in statuses or "missing_key" in statuses:
+        return "unhealthy"
+    return "degraded"
 
 
 async def check_health() -> dict:
@@ -36,16 +65,18 @@ async def check_health() -> dict:
         checks["database"] = {"status": "error", "error": str(e)}
 
     # API key presence (no external calls)
-    checks["deepgram"] = {"status": "ok" if (settings.deepgram_api_key and settings.deepgram_api_key.strip()) else "missing_key"}
-    checks["openai"] = {"status": "ok" if (settings.openai_api_key and settings.openai_api_key.strip()) else "missing_key"}
-    checks["cartesia"] = {"status": "ok" if (settings.cartesia_api_key and settings.cartesia_api_key.strip()) else "missing_key"}
+    for service, attr_name in REQUIRED_API_KEYS.items():
+        checks[service] = check_required_secret(service, getattr(settings, attr_name))
 
-    statuses = [c["status"] for c in checks.values()]
-    if all(s == "ok" for s in statuses):
-        overall = "healthy"
-    elif "error" in statuses or "missing_key" in statuses:
-        overall = "unhealthy"
-    else:
-        overall = "degraded"
+    checks["configuration"] = {
+        "status": "ok",
+        "transport_mode": settings.transport_mode,
+        "model": settings.openai_model,
+        "host": settings.host,
+        "port": settings.port,
+        "tts_low_latency": settings.tts_low_latency,
+    }
+
+    overall = overall_status(checks)
 
     return {"status": overall, "checks": checks}
