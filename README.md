@@ -166,8 +166,15 @@ Key environment variables (see `.env.example` for the full list):
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | End-to-end architecture, pipeline stages, latency vs quality. |
 | [DIAGNOSTICS.md](DIAGNOSTICS.md) | Where the pipeline can break, latency targets, learning-from-feedback. |
+| [docs/OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md) | Pre-run checks, session monitoring, cleanup, and recovery notes. |
+| [docs/ONBOARDING_CHECKLIST.md](docs/ONBOARDING_CHECKLIST.md) | New machine setup, first run, contributor context, and PR readiness. |
+| [docs/PROVIDER_TROUBLESHOOTING.md](docs/PROVIDER_TROUBLESHOOTING.md) | Deepgram, OpenAI, Cartesia, and cross-provider failure triage. |
+| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | Repeatable five-minute demo flow using synthetic caller data. |
 | [docs/TOOLS.md](docs/TOOLS.md) | **All implemented tools** and **ideas for new tools** (list_doctors, get_my_appointments, refill, etc.). |
 | [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md) | Tools and example test flows. |
+| [docs/TEST_TRIAGE.md](docs/TEST_TRIAGE.md) | First checks and reporting notes for failed test or demo flows. |
+| [docs/PRIVACY_REVIEW.md](docs/PRIVACY_REVIEW.md) | Prototype privacy boundaries, logging review, and production gaps. |
+| [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | Code, configuration, demo, and documentation checks before sharing. |
 | [docs/MCP_AND_MEMORY.md](docs/MCP_AND_MEMORY.md) | MCP for tools and Mem0 for memory (assessment). |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branch naming, commits, and pull requests. |
 
